@@ -8,6 +8,7 @@ import pandas as pd
 from backtest import run_backtest
 from data_loader import load_csv, load_yfinance
 from optimizer import run_parameter_sweep
+from paper_tracker import initialize_paper_tracker, update_paper_tracker
 from report import save_report
 from strategy import prepare_signals
 from validation import run_out_of_sample_validation
@@ -23,6 +24,8 @@ mode = p.add_mutually_exclusive_group()
 mode.add_argument("--optimize", action="store_true")
 mode.add_argument("--validate", action="store_true")
 mode.add_argument("--walk-forward", action="store_true")
+mode.add_argument("--paper-init", action="store_true")
+mode.add_argument("--paper-update", action="store_true")
 a = p.parse_args()
 
 with open(a.config, "r", encoding="utf-8") as f:
@@ -43,7 +46,26 @@ else:
 
 out = Path("output") / name
 
-if a.walk_forward:
+if a.paper_init:
+    paper_out = out / "paper"
+    summary = initialize_paper_tracker(data, c, paper_out)
+    print("\nHANIF TRADING SUITE PRO — PHASE 4 PAPER TRACKER")
+    print("=" * 59)
+    print("Status                   COLLECTING")
+    print(f"Initialized through      {summary['initialized_through']}")
+    print(f"Target paper trades      {summary['metrics']['trades_remaining']}")
+    print(f"\nRun py main.py --paper-update after each completed market day.")
+    print(f"Paper tracker saved to: {paper_out.resolve()}")
+elif a.paper_update:
+    paper_out = out / "paper"
+    summary = update_paper_tracker(data, c, paper_out)
+    print("\nHANIF TRADING SUITE PRO — PHASE 4 PAPER UPDATE")
+    print("=" * 58)
+    print(f"Status                   {summary['status']}")
+    for key, value in summary["metrics"].items():
+        print(f"{key.replace('_', ' ').title():25} {value}")
+    print(f"\nPaper summary saved to: {(paper_out / 'paper_summary.json').resolve()}")
+elif a.walk_forward:
     report, trades = run_walk_forward_validation(
         data,
         c,
