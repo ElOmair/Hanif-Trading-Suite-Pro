@@ -1,6 +1,6 @@
-# Hanif Trading Suite Pro — Phase 3B
+# Hanif Trading Suite Pro — Phase 4
 
-Research-only QQQ intraday strategy backtester with chronological validation.
+Research-only QQQ intraday strategy validation and paper tracker. It does not connect to a broker or place orders.
 
 ## Install
 
@@ -8,7 +8,7 @@ Research-only QQQ intraday strategy backtester with chronological validation.
 py -m pip install -r requirements.txt
 ```
 
-## Commands
+## Historical validation commands
 
 ```powershell
 py main.py
@@ -17,41 +17,62 @@ py main.py --validate
 py main.py --walk-forward
 ```
 
-- `--optimize`: tests 1,296 configurations on the complete dataset.
-- `--validate`: performs one 70% training / 30% unseen test split.
-- `--walk-forward`: performs repeated expanding-window validation.
+## Phase 4: initialize paper tracking once
 
-## Phase 3B walk-forward method
+After merging Phase 4 and downloading the updated repository:
 
-`py main.py --walk-forward`:
+```powershell
+py main.py --paper-init
+```
 
-1. Starts with 20 training days.
-2. Optimizes 1,296 configurations using training data only.
-3. Rejects configurations with fewer than 8 training trades.
-4. Tests the selected configuration on the next untouched 10 days.
-5. Expands training by 10 days and repeats.
-6. Keeps test windows non-overlapping so unseen trades are not double-counted.
-7. Combines every out-of-sample trade into one final result.
+Initialization:
 
-The final PASS gate requires:
+- locks the stable configuration selected by repeated validation
+- starts after the latest completed trading day
+- does not backfill optimized historical trades
+- creates a persistent local paper-tracking folder
 
-- at least 3 completed folds
-- at least 15 combined unseen trades
-- positive combined profit
-- positive combined average R
-- at least 60% profitable folds
-- no fold worse than a 5% drawdown
+Locked configuration:
 
-This process runs the optimizer multiple times and can take considerably longer than `--optimize`.
+- minimum score: 80
+- minimum ADX: 30
+- minimum RVOL: 1.0
+- stop: 1.5 ATR
+- target: 2.5R
+- long only
 
-## Phase 3B outputs
+## Update after a completed market day
 
-Files are saved under `output\QQQ\walk_forward`:
+```powershell
+py main.py --paper-update
+```
 
-- `walk_forward_report.json` — final PASS/FAIL, aggregate metrics, and every fold
-- `walk_forward_trades.csv` — combined unseen trades
-- `fold_summary.csv` — compact comparison of each test window and selected configuration
+Run this after the normal market session has completed. The tracker:
+
+- processes only new completed days
+- prevents duplicate trades
+- carries simulated capital forward
+- closes positions by the end of each day
+- keeps the configuration locked
+- never places an order
+
+## Phase 4 outputs
+
+Files are saved under `output\QQQ\paper`:
+
+- `paper_state.json` — locked settings and processing checkpoint
+- `paper_trades.csv` — every new paper trade
+- `paper_summary.json` — progress, metrics, and final PASS/FAIL
+
+The status remains `COLLECTING` until at least 20 paper trades are recorded. It then requires:
+
+- positive net profit
+- positive average R
+- profit factor of at least 1.20
+- maximum drawdown no worse than 5%
+
+Keep the entire `output\QQQ\paper` folder. Deleting it resets the paper test.
 
 ## Important
 
-A PASS does not authorize live trading. The next gates are longer historical data and paper trading. This software does not connect to a broker or place orders.
+This is end-of-day research tracking, not a real-time alert or execution system. A PASS is still not a guarantee of future performance.
