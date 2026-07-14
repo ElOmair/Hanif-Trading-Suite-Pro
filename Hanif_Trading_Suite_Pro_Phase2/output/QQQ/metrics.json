@@ -1,0 +1,11 @@
+{
+  "starting_capital": 10000.0,
+  "ending_capital": 10753.21,
+  "net_profit": 753.21,
+  "total_return_pct": 7.53,
+  "trades": 43,
+  "win_rate_pct": 39.53,
+  "profit_factor": 1.27,
+  "average_r": 0.18,
+  "max_drawdown_pct": -6.9
+}
