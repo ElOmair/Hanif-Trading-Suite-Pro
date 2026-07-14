@@ -33,32 +33,41 @@ def run_backtest(df: pd.DataFrame, c: dict):
     max_day = int(c.get("max_trades_per_day", 999))
     trades, equity, position, day_counts = [], [], None, {}
 
-    for ts, row in df.iterrows():
+    def close_position(position: dict, ts, raw_exit: float, reason: str):
+        nonlocal capital
+        direction = position["direction"]
+        exit_price = raw_exit + (slip if direction == "SHORT" else -slip)
+        pnl = (
+            (exit_price - position["entry"])
+            if direction == "LONG"
+            else (position["entry"] - exit_price)
+        ) * position["quantity"] - commission
+        risk_dollars = abs(position["entry"] - position["stop"]) * position["quantity"]
+        capital += pnl
+        trades.append(Trade(
+            direction, position["setup_type"], str(position["entry_time"]), str(ts),
+            int(position["entry_time"].hour), round(position["entry"], 4),
+            round(exit_price, 4), round(position["stop"], 4), round(position["target"], 4),
+            position["quantity"], round(pnl, 2),
+            round(pnl / risk_dollars if risk_dollars else 0, 2), reason,
+            position["score"], round(position["adx"], 2), round(position["rvol"], 2)
+        ))
+
+    rows = list(df.iterrows())
+    for index, (ts, row) in enumerate(rows):
         day = ts.date()
+        is_last_bar = index == len(rows) - 1 or rows[index + 1][0].date() != day
         day_counts.setdefault(day, 0)
         equity.append({"Time": ts, "Equity": capital})
 
         if position:
-            d = position["direction"]
-            stop_hit = row["Low"] <= position["stop"] if d == "LONG" else row["High"] >= position["stop"]
-            target_hit = row["High"] >= position["target"] if d == "LONG" else row["Low"] <= position["target"]
+            direction = position["direction"]
+            stop_hit = row["Low"] <= position["stop"] if direction == "LONG" else row["High"] >= position["stop"]
+            target_hit = row["High"] >= position["target"] if direction == "LONG" else row["Low"] <= position["target"]
             if stop_hit or target_hit:
-                exit_price = position["stop"] if stop_hit else position["target"]
-                reason = "STOP" if stop_hit else "TARGET"
-                exit_price += slip if d == "SHORT" else -slip
-                pnl = ((exit_price - position["entry"]) if d == "LONG" else (position["entry"] - exit_price)) * position["quantity"] - commission
-                risk_dollars = abs(position["entry"] - position["stop"]) * position["quantity"]
-                capital += pnl
-                trades.append(Trade(
-                    d, position["setup_type"], str(position["entry_time"]), str(ts),
-                    int(position["entry_time"].hour), round(position["entry"],4),
-                    round(exit_price,4), round(position["stop"],4), round(position["target"],4),
-                    position["quantity"], round(pnl,2),
-                    round(pnl/risk_dollars if risk_dollars else 0,2), reason,
-                    position["score"], round(position["adx"],2), round(position["rvol"],2)
-                ))
+                raw_exit = position["stop"] if stop_hit else position["target"]
+                close_position(position, ts, raw_exit, "STOP" if stop_hit else "TARGET")
                 position = None
-                continue
 
         if position is None and day_counts[day] < max_day and pd.notna(row.get("ATR")) and row["ATR"] > 0:
             direction = None
@@ -70,13 +79,23 @@ def run_backtest(df: pd.DataFrame, c: dict):
             if direction:
                 entry = float(row["Close"]) + (slip if direction == "LONG" else -slip)
                 risk_share = float(row["ATR"]) * stop_atr
-                qty = max(1, math.floor((capital * risk_pct) / risk_share))
-                stop = entry - risk_share if direction == "LONG" else entry + risk_share
-                target = entry + risk_share * target_r if direction == "LONG" else entry - risk_share * target_r
-                position = dict(direction=direction, entry_time=ts, entry=entry, stop=stop,
-                                target=target, quantity=qty, score=score, setup_type=setup_type,
-                                adx=float(row["ADX"]), rvol=float(row["RVOL"]) if pd.notna(row["RVOL"]) else 0.0)
-                day_counts[day] += 1
+                risk_qty = math.floor((capital * risk_pct) / risk_share)
+                buying_power_qty = math.floor(capital / entry) if entry > 0 else 0
+                qty = min(risk_qty, buying_power_qty)
+                if qty >= 1:
+                    stop = entry - risk_share if direction == "LONG" else entry + risk_share
+                    target = entry + risk_share * target_r if direction == "LONG" else entry - risk_share * target_r
+                    position = dict(
+                        direction=direction, entry_time=ts, entry=entry, stop=stop,
+                        target=target, quantity=qty, score=score, setup_type=setup_type,
+                        adx=float(row["ADX"]),
+                        rvol=float(row["RVOL"]) if pd.notna(row["RVOL"]) else 0.0,
+                    )
+                    day_counts[day] += 1
+
+        if position and is_last_bar:
+            close_position(position, ts, float(row["Close"]), "END_OF_DAY")
+            position = None
 
     trade_df = pd.DataFrame([asdict(t) for t in trades])
     equity_df = pd.DataFrame(equity).set_index("Time")
@@ -92,14 +111,14 @@ def run_backtest(df: pd.DataFrame, c: dict):
     peak = equity_df["Equity"].cummax()
     dd = (equity_df["Equity"] - peak) / peak
     metrics = {
-        "starting_capital": round(initial,2),
-        "ending_capital": round(capital,2),
-        "net_profit": round(capital-initial,2),
-        "total_return_pct": round((capital/initial-1)*100,2),
+        "starting_capital": round(initial, 2),
+        "ending_capital": round(capital, 2),
+        "net_profit": round(capital - initial, 2),
+        "total_return_pct": round((capital / initial - 1) * 100, 2),
         "trades": int(len(trade_df)),
-        "win_rate_pct": round((trade_df.pnl > 0).mean()*100,2),
-        "profit_factor": round(gp/gl,2) if gl else float("inf"),
-        "average_r": round(trade_df.r_multiple.mean(),2),
-        "max_drawdown_pct": round(dd.min()*100,2)
+        "win_rate_pct": round((trade_df.pnl > 0).mean() * 100, 2),
+        "profit_factor": round(gp / gl, 2) if gl else float("inf"),
+        "average_r": round(trade_df.r_multiple.mean(), 2),
+        "max_drawdown_pct": round(dd.min() * 100, 2)
     }
     return trade_df, metrics, equity_df
