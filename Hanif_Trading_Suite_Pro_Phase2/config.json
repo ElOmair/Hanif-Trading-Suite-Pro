@@ -26,5 +26,9 @@
   "minimum_body_atr": 0.2,
   "maximum_vwap_distance_atr": 1.5,
   "train_split_pct": 0.7,
-  "validation_minimum_training_trades": 10
+  "validation_minimum_training_trades": 10,
+  "walk_forward_initial_train_days": 20,
+  "walk_forward_test_days": 10,
+  "walk_forward_minimum_training_trades": 8,
+  "walk_forward_minimum_test_trades": 15
 }
