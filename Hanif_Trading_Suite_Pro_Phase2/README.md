@@ -1,6 +1,6 @@
-# Hanif Trading Suite Pro — Phase 3
+# Hanif Trading Suite Pro — Phase 3B
 
-Research-only QQQ intraday strategy backtester with chronological out-of-sample validation.
+Research-only QQQ intraday strategy backtester with chronological validation.
 
 ## Install
 
@@ -8,46 +8,50 @@ Research-only QQQ intraday strategy backtester with chronological out-of-sample 
 py -m pip install -r requirements.txt
 ```
 
-## Run baseline
+## Commands
 
 ```powershell
 py main.py
-```
-
-## Run optimizer
-
-```powershell
 py main.py --optimize
-```
-
-The optimizer tests 1,296 configurations and may take several minutes.
-
-## Run Phase 3 validation
-
-```powershell
 py main.py --validate
+py main.py --walk-forward
 ```
 
-Phase 3:
+- `--optimize`: tests 1,296 configurations on the complete dataset.
+- `--validate`: performs one 70% training / 30% unseen test split.
+- `--walk-forward`: performs repeated expanding-window validation.
 
-1. Uses the oldest 70% of trading days as training data.
-2. Tests 1,296 configurations only on that training period.
-3. Rejects configurations with fewer than 10 training trades.
-4. Selects the highest-ranked eligible training configuration.
-5. Runs it once on the untouched newest 30% of trading days.
-6. Grades the out-of-sample result using trade count, profit, average R, profit factor, and drawdown.
+## Phase 3B walk-forward method
 
-## Phase 3 outputs
+`py main.py --walk-forward`:
 
-Files are saved under `output\QQQ\validation`:
+1. Starts with 20 training days.
+2. Optimizes 1,296 configurations using training data only.
+3. Rejects configurations with fewer than 8 training trades.
+4. Tests the selected configuration on the next untouched 10 days.
+5. Expands training by 10 days and repeats.
+6. Keeps test windows non-overlapping so unseen trades are not double-counted.
+7. Combines every out-of-sample trade into one final result.
 
-- `validation_report.json` — selected configuration, training results, unseen test results, and PASS/FAIL checks
-- `top_25_configurations.csv` — best training-period configurations
-- `metrics.json` — out-of-sample metrics
-- `trades.csv` — out-of-sample trades
-- `equity_curve.png` — out-of-sample equity curve
-- diagnostic CSV files
+The final PASS gate requires:
+
+- at least 3 completed folds
+- at least 15 combined unseen trades
+- positive combined profit
+- positive combined average R
+- at least 60% profitable folds
+- no fold worse than a 5% drawdown
+
+This process runs the optimizer multiple times and can take considerably longer than `--optimize`.
+
+## Phase 3B outputs
+
+Files are saved under `output\QQQ\walk_forward`:
+
+- `walk_forward_report.json` — final PASS/FAIL, aggregate metrics, and every fold
+- `walk_forward_trades.csv` — combined unseen trades
+- `fold_summary.csv` — compact comparison of each test window and selected configuration
 
 ## Important
 
-A PASS does not make the strategy ready for live trading. The next gates are a longer historical dataset, repeated walk-forward windows, and paper trading. This software does not place orders.
+A PASS does not authorize live trading. The next gates are longer historical data and paper trading. This software does not connect to a broker or place orders.

@@ -3,12 +3,15 @@ import argparse
 import json
 from pathlib import Path
 
+import pandas as pd
+
 from backtest import run_backtest
 from data_loader import load_csv, load_yfinance
 from optimizer import run_parameter_sweep
 from report import save_report
 from strategy import prepare_signals
 from validation import run_out_of_sample_validation
+from walk_forward import run_walk_forward_validation
 
 p = argparse.ArgumentParser()
 p.add_argument("--config", default="config.json")
@@ -19,6 +22,7 @@ p.add_argument("--interval")
 mode = p.add_mutually_exclusive_group()
 mode.add_argument("--optimize", action="store_true")
 mode.add_argument("--validate", action="store_true")
+mode.add_argument("--walk-forward", action="store_true")
 a = p.parse_args()
 
 with open(a.config, "r", encoding="utf-8") as f:
@@ -39,7 +43,43 @@ else:
 
 out = Path("output") / name
 
-if a.validate:
+if a.walk_forward:
+    report, trades = run_walk_forward_validation(
+        data,
+        c,
+        initial_train_days=int(c.get("walk_forward_initial_train_days", 20)),
+        test_days=int(c.get("walk_forward_test_days", 10)),
+        minimum_training_trades=int(c.get("walk_forward_minimum_training_trades", 8)),
+        minimum_total_test_trades=int(c.get("walk_forward_minimum_test_trades", 15)),
+    )
+    walk_out = out / "walk_forward"
+    walk_out.mkdir(parents=True, exist_ok=True)
+    with open(walk_out / "walk_forward_report.json", "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2)
+    trades.to_csv(walk_out / "walk_forward_trades.csv", index=False)
+    pd.DataFrame([
+        {
+            "fold": fold["fold"],
+            "training_start": fold["training_start"],
+            "training_end": fold["training_end"],
+            "test_start": fold["test_start"],
+            "test_end": fold["test_end"],
+            **fold["selected_configuration"],
+            **{f"test_{key}": value for key, value in fold["out_of_sample_metrics"].items()},
+        }
+        for fold in report["folds"]
+    ]).to_csv(walk_out / "fold_summary.csv", index=False)
+
+    print("\nHANIF TRADING SUITE PRO — PHASE 3B WALK-FORWARD")
+    print("=" * 62)
+    print(f"Status                        {report['status']}")
+    for key, value in report["aggregate_out_of_sample_metrics"].items():
+        print(f"{key.replace('_', ' ').title():30} {value}")
+    print("\nVALIDATION CHECKS")
+    for key, value in report["validation_checks"].items():
+        print(f"{key.replace('_', ' ').title():45} {'PASS' if value else 'FAIL'}")
+    print(f"\nWalk-forward reports saved to: {walk_out.resolve()}")
+elif a.validate:
     report, sweep, signals, trades, equity = run_out_of_sample_validation(
         data,
         c,
