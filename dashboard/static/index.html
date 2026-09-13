@@ -5,12 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Hanif's Trading Suite</title>
   <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/alerts.css" />
   <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
   <header class="topbar">
     <div><div class="eyebrow">MNTLOGIC</div><h1>Hanif's Trading Suite</h1></div>
     <div class="system-status">
+      <button id="enableAlerts" class="pill alert-toggle">Enable browser alerts</button>
       <span id="alpacaStatus" class="pill">Alpaca …</span>
       <span id="kronosStatus" class="pill">Kronos …</span>
       <span id="feedStatus" class="pill">Feed …</span>
@@ -34,12 +36,28 @@
         <div class="attribution">Chart rendering by <a href="https://www.tradingview.com/" target="_blank" rel="noreferrer">TradingView Lightweight Charts™</a>; market data supplied by Alpaca.</div>
       </section>
       <section class="lower-grid">
-        <article class="panel analysis-card"><div class="eyebrow">INTELLIGENCE</div><h2>Kronos Analysis</h2><div class="metric-grid"><div><span>Technical score</span><strong id="technicalScore">—</strong></div><div><span>Direction</span><strong id="direction">—</strong></div><div><span>30m momentum</span><strong id="momentum">—</strong></div><div><span>RVOL</span><strong id="rvol">—</strong></div><div><span>ATR %</span><strong id="atrPct">—</strong></div><div><span>Kronos</span><strong id="kronosAnalysisState">Checking</strong></div></div><div class="notice">The next phase will connect ensemble forecast, structure, entry state, stop/targets, and option-fit output from the existing Kronos API.</div></article>
-        <article class="panel options-card"><div class="eyebrow">DERIVATIVES</div><h2>Option Fit</h2><div class="empty-state">Waiting for the option-selector API connection.</div></article>
-        <article class="panel positions-card"><div class="eyebrow">PORTFOLIO</div><h2>Positions</h2><div class="empty-state">Background broker-position synchronization is not enabled in this phase.</div></article>
+        <article class="panel analysis-card">
+          <div class="eyebrow">INTELLIGENCE</div><h2>Kronos Analysis</h2>
+          <div class="metric-grid"><div><span>Technical score</span><strong id="technicalScore">—</strong></div><div><span>Direction</span><strong id="direction">—</strong></div><div><span>30m momentum</span><strong id="momentum">—</strong></div><div><span>RVOL</span><strong id="rvol">—</strong></div><div><span>ATR %</span><strong id="atrPct">—</strong></div><div><span>Kronos</span><strong id="kronosAnalysisState">Checking</strong></div></div>
+          <div id="setupCard" class="setup-card waiting">
+            <div class="setup-header"><span id="setupState">WAITING</span><strong id="setupDirection">—</strong></div>
+            <div class="setup-grid">
+              <div><span>Entry zone</span><strong id="entryZone">—</strong></div>
+              <div><span>No chase</span><strong id="noChase">—</strong></div>
+              <div><span>Stop</span><strong id="stopLevel">—</strong></div>
+              <div><span>TP1</span><strong id="tp1Level">—</strong></div>
+              <div><span>TP2</span><strong id="tp2Level">—</strong></div>
+              <div><span>TP3</span><strong id="tp3Level">—</strong></div>
+            </div>
+            <div id="setupNote" class="setup-note">Technical preview only until the Kronos bridge confirms the setup.</div>
+          </div>
+        </article>
+        <article class="panel options-card"><div class="eyebrow">DERIVATIVES</div><h2>Option Fit</h2><div class="empty-state">Waiting for the option-selector bridge. The selected contract will appear here after Kronos confirms a setup.</div></article>
+        <article class="panel positions-card"><div class="eyebrow">PORTFOLIO</div><h2>Positions</h2><div class="empty-state">Robinhood position synchronization will populate this panel next. Exit/thesis alerts will use the same popup system.</div></article>
       </section>
     </section>
   </main>
+  <div id="toastStack" class="toast-stack" aria-live="polite"></div>
   <script src="/static/app.js"></script>
 </body>
 </html>
