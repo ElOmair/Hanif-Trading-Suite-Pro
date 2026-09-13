@@ -1,5 +1,8 @@
 (() => {
-  const state = { symbol: 'SPY', timeframe: '5m', socket: null, radar: new Map(), currentAnalysis: null };
+  const state = {
+    symbol: 'SPY', timeframe: '5m', socket: null, radar: new Map(), currentAnalysis: null,
+    currentSetup: null, lastAlertState: new Map(), notificationsEnabled: false,
+  };
 
   const chartEl = document.getElementById('chart');
   const chart = LightweightCharts.createChart(chartEl, {
@@ -19,7 +22,6 @@
     priceFormat: { type: 'volume' }, priceScaleId: '',
   });
   volume.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
-
   const ema9Series = chart.addSeries(LightweightCharts.LineSeries, {
     color: '#4db6ff', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, title: 'EMA 9',
   });
@@ -73,10 +75,7 @@
 
   function etParts(epochSeconds) {
     const parts = Object.fromEntries(etFormatter.formatToParts(new Date(epochSeconds * 1000)).map(p => [p.type, p.value]));
-    return {
-      day: `${parts.year}-${parts.month}-${parts.day}`,
-      minutes: Number(parts.hour) * 60 + Number(parts.minute),
-    };
+    return { day: `${parts.year}-${parts.month}-${parts.day}`, minutes: Number(parts.hour) * 60 + Number(parts.minute) };
   }
 
   function rthVwap(rows) {
@@ -85,11 +84,7 @@
     let vol = 0;
     return rows.map(row => {
       const et = etParts(row.time);
-      if (et.day !== currentDay) {
-        currentDay = et.day;
-        pv = 0;
-        vol = 0;
-      }
+      if (et.day !== currentDay) { currentDay = et.day; pv = 0; vol = 0; }
       const inRth = et.minutes >= 570 && et.minutes < 960;
       if (!inRth || !Number(row.volume)) return { time: row.time };
       const typical = (Number(row.high) + Number(row.low) + Number(row.close)) / 3;
@@ -99,7 +94,7 @@
     });
   }
 
-  function analyzeBars(rows) {
+  function barStats(rows) {
     const clean = rows.filter(r => Number.isFinite(Number(r.close)) && Number.isFinite(Number(r.volume)));
     if (clean.length < 25) return null;
     const frame = clean.slice(-120);
@@ -123,20 +118,140 @@
     const atr14 = tr.length >= 14 ? avg(tr.slice(-14)) : 0;
     const atrPct = last > 0 ? atr14 / last * 100 : 0;
     const emaSpread = ema21.at(-1) ? (ema9.at(-1) / ema21.at(-1) - 1) * 100 : 0;
+    return { frame, closes, highs, lows, volumes, ema9, ema21, last, momentum, rvol, atr14, atrPct, emaSpread };
+  }
 
+  function analyzeBars(rows) {
+    const stats = barStats(rows);
+    if (!stats) return null;
     let score = 50;
-    score += Math.max(-18, Math.min(18, emaSpread * 45));
-    score += Math.max(-18, Math.min(18, momentum * 9));
-    if (rvol >= 1.5) score += momentum >= 0 ? 8 : -8;
-    else if (rvol >= 1.1) score += momentum >= 0 ? 4 : -4;
+    score += Math.max(-18, Math.min(18, stats.emaSpread * 45));
+    score += Math.max(-18, Math.min(18, stats.momentum * 9));
+    if (stats.rvol >= 1.5) score += stats.momentum >= 0 ? 8 : -8;
+    else if (stats.rvol >= 1.1) score += stats.momentum >= 0 ? 4 : -4;
     score = Math.max(0, Math.min(100, score));
     const direction = score >= 62 ? 'LONG' : score <= 38 ? 'SHORT' : 'NEUTRAL';
     return {
-      symbol: state.symbol,
-      score: Number(score.toFixed(1)), direction,
-      momentum_30m_pct: Number(momentum.toFixed(2)),
-      rvol: Number(rvol.toFixed(2)), atr_pct: Number(atrPct.toFixed(2)),
+      symbol: state.symbol, score: Number(score.toFixed(1)), direction,
+      momentum_30m_pct: Number(stats.momentum.toFixed(2)), rvol: Number(stats.rvol.toFixed(2)),
+      atr_pct: Number(stats.atrPct.toFixed(2)), atr_abs: stats.atr14,
     };
+  }
+
+  function money(value) {
+    return Number.isFinite(Number(value)) ? `$${Number(value).toFixed(2)}` : '—';
+  }
+
+  function buildTechnicalPreview(rows, analysis) {
+    const stats = barStats(rows);
+    if (!stats || !analysis || analysis.direction === 'NEUTRAL' || !stats.atr14) {
+      return { state: 'WAITING', css: 'waiting', direction: analysis?.direction || '—', note: 'No directional setup yet. Kronos confirmation is still required.' };
+    }
+    const direction = analysis.direction;
+    const atr = stats.atr14;
+    const current = stats.last;
+    const recent = stats.frame.slice(-7, -1);
+    const trigger = direction === 'LONG'
+      ? Math.max(...recent.map(r => Number(r.high)))
+      : Math.min(...recent.map(r => Number(r.low)));
+    const entryLow = trigger - atr * 0.10;
+    const entryHigh = trigger + atr * 0.10;
+    const midpoint = (entryLow + entryHigh) / 2;
+    const noChase = direction === 'LONG' ? entryHigh + atr * 0.25 : entryLow - atr * 0.25;
+    const stop = direction === 'LONG' ? midpoint - atr : midpoint + atr;
+    const risk = Math.abs(midpoint - stop);
+    const tp1 = direction === 'LONG' ? midpoint + risk : midpoint - risk;
+    const tp2 = direction === 'LONG' ? midpoint + risk * 2 : midpoint - risk * 2;
+    const tp3 = direction === 'LONG' ? midpoint + risk * 3 : midpoint - risk * 3;
+
+    let setupState = 'WATCH';
+    let css = 'watch';
+    if (current >= entryLow && current <= entryHigh) { setupState = 'PREVIEW ENTRY ZONE'; css = 'ready'; }
+    if (direction === 'LONG' && current > noChase) { setupState = 'DO NOT CHASE'; css = 'too-late'; }
+    if (direction === 'SHORT' && current < noChase) { setupState = 'DO NOT CHASE'; css = 'too-late'; }
+
+    return {
+      state: setupState, css, direction, current, entryLow, entryHigh, noChase, stop, tp1, tp2, tp3,
+      note: setupState === 'DO NOT CHASE'
+        ? 'Price has moved beyond the preliminary chase limit. Wait for a retest/re-entry condition.'
+        : 'Technical preview only. Do not treat this as CONFIRM until the Kronos ensemble and risk gates agree.',
+    };
+  }
+
+  function renderAnalysis(item) {
+    const values = item || {};
+    document.getElementById('technicalScore').textContent = values.score ?? '—';
+    document.getElementById('direction').textContent = values.direction ?? '—';
+    document.getElementById('momentum').textContent = values.momentum_30m_pct == null ? '—' : `${values.momentum_30m_pct}%`;
+    document.getElementById('rvol').textContent = values.rvol ?? '—';
+    document.getElementById('atrPct').textContent = values.atr_pct == null ? '—' : `${values.atr_pct}%`;
+  }
+
+  function renderSetup(setup) {
+    state.currentSetup = setup;
+    const card = document.getElementById('setupCard');
+    card.className = `setup-card ${setup.css || 'waiting'}`;
+    document.getElementById('setupState').textContent = setup.state || 'WAITING';
+    document.getElementById('setupDirection').textContent = setup.direction || '—';
+    document.getElementById('entryZone').textContent = setup.entryLow == null ? '—' : `${money(setup.entryLow)} – ${money(setup.entryHigh)}`;
+    document.getElementById('noChase').textContent = money(setup.noChase);
+    document.getElementById('stopLevel').textContent = money(setup.stop);
+    document.getElementById('tp1Level').textContent = money(setup.tp1);
+    document.getElementById('tp2Level').textContent = money(setup.tp2);
+    document.getElementById('tp3Level').textContent = money(setup.tp3);
+    document.getElementById('setupNote').textContent = setup.note || '';
+    maybeAlertSetup(setup);
+  }
+
+  function showToast(title, body, css = 'ready') {
+    const stack = document.getElementById('toastStack');
+    const toast = document.createElement('div');
+    toast.className = `trade-toast ${css}`;
+    toast.innerHTML = `<button class="toast-close" aria-label="Dismiss">×</button><div class="toast-title">${title}</div><div class="toast-body">${body}</div>`;
+    toast.querySelector('.toast-close').addEventListener('click', () => toast.remove());
+    stack.prepend(toast);
+    setTimeout(() => toast.remove(), 12000);
+  }
+
+  function maybeDesktopNotification(title, body) {
+    if (!state.notificationsEnabled || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    try { new Notification(title, { body, tag: `hanif-${state.symbol}` }); } catch (_) {}
+  }
+
+  function maybeAlertSetup(setup) {
+    if (!['PREVIEW ENTRY ZONE', 'DO NOT CHASE'].includes(setup.state)) return;
+    const previous = state.lastAlertState.get(state.symbol);
+    if (previous === setup.state) return;
+    state.lastAlertState.set(state.symbol, setup.state);
+    const title = setup.state === 'DO NOT CHASE' ? `⚠ ${state.symbol} — DO NOT CHASE` : `◉ ${state.symbol} — Entry zone preview`;
+    const body = setup.state === 'DO NOT CHASE'
+      ? `${setup.direction} moved beyond ${money(setup.noChase)}. Wait for a retest. No Kronos confirmation yet.`
+      : `${setup.direction} technical zone ${money(setup.entryLow)}–${money(setup.entryHigh)}. No-chase ${money(setup.noChase)}. Kronos confirmation pending.`;
+    showToast(title, body, setup.css);
+    maybeDesktopNotification(title.replace(/[⚠◉]/g, '').trim(), body);
+  }
+
+  async function configureNotifications() {
+    const button = document.getElementById('enableAlerts');
+    if (typeof Notification === 'undefined') {
+      button.textContent = 'Browser alerts unavailable';
+      button.disabled = true;
+      return;
+    }
+    if (Notification.permission === 'granted') {
+      state.notificationsEnabled = true;
+      button.textContent = 'Browser alerts on';
+      button.classList.add('enabled');
+      return;
+    }
+    if (Notification.permission === 'denied') {
+      button.textContent = 'Alerts blocked in browser';
+      return;
+    }
+    const permission = await Notification.requestPermission();
+    state.notificationsEnabled = permission === 'granted';
+    button.textContent = state.notificationsEnabled ? 'Browser alerts on' : 'Enable browser alerts';
+    button.classList.toggle('enabled', state.notificationsEnabled);
   }
 
   async function loadBars() {
@@ -151,18 +266,12 @@
     ema21Series.setData(ema(data.bars, 21));
     vwapSeries.setData(rthVwap(data.bars));
     if (data.bars.length) document.getElementById('lastPrice').textContent = `$${data.bars[data.bars.length - 1].close.toFixed(2)}`;
-    state.currentAnalysis = state.radar.get(state.symbol) || analyzeBars(data.bars);
+    const localAnalysis = analyzeBars(data.bars);
+    const radarAnalysis = state.radar.get(state.symbol);
+    state.currentAnalysis = radarAnalysis ? { ...localAnalysis, ...radarAnalysis, atr_abs: localAnalysis?.atr_abs } : localAnalysis;
     renderAnalysis(state.currentAnalysis);
+    renderSetup(buildTechnicalPreview(data.bars, state.currentAnalysis));
     chart.timeScale().fitContent();
-  }
-
-  function renderAnalysis(item) {
-    const values = item || {};
-    document.getElementById('technicalScore').textContent = values.score ?? '—';
-    document.getElementById('direction').textContent = values.direction ?? '—';
-    document.getElementById('momentum').textContent = values.momentum_30m_pct == null ? '—' : `${values.momentum_30m_pct}%`;
-    document.getElementById('rvol').textContent = values.rvol ?? '—';
-    document.getElementById('atrPct').textContent = values.atr_pct == null ? '—' : `${values.atr_pct}%`;
   }
 
   function renderRadarList(containerId, rows, side) {
@@ -193,7 +302,8 @@
       renderRadarList('longRadar', data.longs, 'long');
       renderRadarList('shortRadar', data.shorts, 'short');
       if (state.radar.has(state.symbol)) {
-        state.currentAnalysis = state.radar.get(state.symbol);
+        const radar = state.radar.get(state.symbol);
+        state.currentAnalysis = { ...(state.currentAnalysis || {}), ...radar };
         renderAnalysis(state.currentAnalysis);
       }
     } catch (err) {
@@ -205,10 +315,7 @@
   }
 
   function connectSocket() {
-    if (state.socket) {
-      state.socket.onclose = null;
-      state.socket.close();
-    }
+    if (state.socket) { state.socket.onclose = null; state.socket.close(); }
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
     const socket = new WebSocket(`${scheme}://${location.host}/ws/market/${encodeURIComponent(state.symbol)}`);
     state.socket = socket;
@@ -228,10 +335,7 @@
         volume.update({ time: msg.bar.time, value: msg.bar.volume, color: volumeColor(msg.bar) });
       }
     };
-    socket.onclose = () => {
-      if (socket !== state.socket) return;
-      setTimeout(connectSocket, 2500);
-    };
+    socket.onclose = () => { if (socket === state.socket) setTimeout(connectSocket, 2500); };
   }
 
   async function selectSymbol(symbol) {
@@ -245,7 +349,6 @@
     event.preventDefault();
     selectSymbol(document.getElementById('symbolInput').value);
   });
-
   document.getElementById('timeframes').addEventListener('click', async event => {
     const button = event.target.closest('button[data-tf]');
     if (!button) return;
@@ -253,8 +356,15 @@
     document.querySelectorAll('#timeframes button').forEach(b => b.classList.toggle('active', b === button));
     await loadBars();
   });
-
   document.getElementById('refreshRadar').addEventListener('click', loadRadar);
+  document.getElementById('enableAlerts').addEventListener('click', configureNotifications);
+
+  if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+    state.notificationsEnabled = true;
+    document.getElementById('enableAlerts').textContent = 'Browser alerts on';
+    document.getElementById('enableAlerts').classList.add('enabled');
+  }
+
   loadSystem();
   loadRadar();
   selectSymbol('SPY');
