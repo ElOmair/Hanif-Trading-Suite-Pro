@@ -7,6 +7,15 @@
     return undefined;
   }
 
+  function put(id, value) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value ?? '—';
+  }
+
+  function pct(value) {
+    return Number.isFinite(Number(value)) ? `${Number(value) >= 0 ? '+' : ''}${Number(value).toFixed(2)}%` : '—';
+  }
+
   function decisionLabel(decision) {
     if (!decision) return 'UNKNOWN';
     if (typeof decision === 'string') return decision.toUpperCase();
@@ -56,6 +65,23 @@
     return { blocked, noChase, price, entryLow, entryHigh };
   }
 
+  function syncKronosPanel(kronos) {
+    put('kronosScore', kronos.average_score == null ? '—' : `${Number(kronos.average_score).toFixed(1)}/100`);
+    put('kronos1h', pct(kronos.median_1h_move_pct));
+    put('kronos2h', pct(kronos.median_2h_move_pct));
+    put('kronosPaths', `${kronos.bullish_paths ?? 0}B / ${kronos.bearish_paths ?? 0}S / ${kronos.neutral_paths ?? 0}N`);
+    put('kronosStability', kronos.stability || '—');
+    put('kronosBias', kronos.final_bias || '—');
+    put('kronosAction', kronos.action || '—');
+    put('kronosAnalysisState', `${kronos.final_bias || '—'} · ${kronos.action || '—'}`);
+
+    const message = document.getElementById('kronosLiveMessage');
+    if (message) {
+      const option = kronos.final_bias === 'BULLISH' ? 'CALL bias' : kronos.final_bias === 'BEARISH' ? 'PUT bias' : 'NO OPTION — WAIT';
+      message.textContent = `${option} · ${kronos.stability || '—'} stability · analyzed with trade setup`;
+    }
+  }
+
   function ensureUi() {
     const controls = document.querySelector('.kronos-live-controls');
     const optionCard = document.querySelector('.options-card');
@@ -94,7 +120,8 @@
     button.id = 'runFusion';
     button.type = 'button';
     button.className = 'ghost-button';
-    button.textContent = 'Evaluate setup';
+    button.textContent = 'Analyze Trade Setup';
+    button.title = 'One-click workflow: refresh data, run Kronos, decision engine, no-chase guard, capital guard, and option research';
 
     controls.append(budgetLabel, budget, contractLabel, maxContracts, button);
 
@@ -106,7 +133,7 @@
       host = document.createElement('div');
       host.id = 'fusionResults';
       host.className = 'empty-state';
-      host.textContent = 'Decision Engine, no-chase guard, and capital guard results will appear here.';
+      host.textContent = 'Analyze Trade Setup runs the full research pipeline in one click.';
       optionCard.appendChild(host);
     }
 
@@ -120,11 +147,13 @@
       localStorage.setItem('mts.maxContracts', String(contractCap));
 
       button.disabled = true;
-      button.textContent = 'Evaluating…';
-      host.textContent = `${symbol}: refreshing data, running Kronos, Decision Engine, no-chase guard, and capital guard…`;
+      button.textContent = 'Analyzing…';
+      put('kronosAnalysisState', 'Running…');
+      host.textContent = `${symbol}: refreshing data, running Kronos, Decision Engine, no-chase guard, capital guard, and option research…`;
 
       try {
-        const res = await fetch(`/api/kronos/fusion/${encodeURIComponent(symbol)}`, {
+        const url = `/api/kronos/fusion/${encodeURIComponent(symbol)}?max_contract_cost=${encodeURIComponent(tradeBudget)}`;
+        const res = await fetch(url, {
           method: 'POST',
           credentials: 'same-origin',
           headers: { Accept: 'application/json' },
@@ -138,6 +167,8 @@
         const tradePlan = data.trade_plan || {};
         const options = Array.isArray(data.options) ? data.options : [];
         const chase = noChaseState(technical, tradePlan);
+
+        syncKronosPanel(kronos);
 
         let html = `<div><strong>Decision Engine: ${label}</strong></div>`;
         html += `<div class="fineprint">Technical: ${technical.signal || '—'} · Kronos: ${kronos.final_bias || '—'} · Stability: ${kronos.stability || '—'}</div>`;
@@ -172,10 +203,11 @@
         }
         host.innerHTML = html;
       } catch (err) {
-        host.textContent = `Evaluation error: ${err.message}`;
+        put('kronosAnalysisState', 'Error');
+        host.textContent = `Analysis error: ${err.message}`;
       } finally {
         button.disabled = false;
-        button.textContent = 'Evaluate setup';
+        button.textContent = 'Analyze Trade Setup';
       }
     });
   }
