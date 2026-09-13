@@ -19,6 +19,8 @@ from alpaca.data.historical.stock import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest, StockLatestBarRequest, StockLatestQuoteRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 
+from kronos_api import router as kronos_router
+
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT.parent / ".env")
 load_dotenv(ROOT / ".env")
@@ -45,6 +47,7 @@ if API_KEY and API_SECRET:
     alpaca = StockHistoricalDataClient(API_KEY, API_SECRET)
 
 app = FastAPI(title="Hanif Trading Suite Dashboard", version="0.1.0")
+app.include_router(kronos_router)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 _radar_cache: dict[str, Any] = {"expires": 0.0, "data": None}
 
