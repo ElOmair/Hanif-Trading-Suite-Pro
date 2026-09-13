@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hanif's Trading Suite</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div><div class="eyebrow">MNTLOGIC</div><h1>Hanif's Trading Suite</h1></div>
+    <div class="system-status">
+      <span id="alpacaStatus" class="pill">Alpaca …</span>
+      <span id="kronosStatus" class="pill">Kronos …</span>
+      <span id="feedStatus" class="pill">Feed …</span>
+    </div>
+  </header>
+  <main class="layout">
+    <aside class="panel radar-panel">
+      <div class="panel-title-row"><div><div class="eyebrow">DISCOVERY</div><h2>Market Radar</h2></div><button id="refreshRadar" class="ghost-button">Refresh</button></div>
+      <div class="radar-section"><h3>Long candidates</h3><div id="longRadar" class="radar-list"><div class="muted">Loading…</div></div></div>
+      <div class="radar-section"><h3>Short candidates</h3><div id="shortRadar" class="radar-list"><div class="muted">Loading…</div></div></div>
+      <p class="fineprint">Radar is a fast technical pre-filter. Deeper model analysis and risk controls are separate.</p>
+    </aside>
+    <section class="workspace">
+      <section class="panel chart-panel">
+        <div class="chart-toolbar">
+          <form id="symbolForm" class="symbol-form"><input id="symbolInput" value="SPY" maxlength="10" autocomplete="off" aria-label="Symbol" /><button type="submit">Load</button></form>
+          <div class="timeframes" id="timeframes"><button data-tf="1m">1m</button><button data-tf="5m" class="active">5m</button><button data-tf="15m">15m</button><button data-tf="1h">1h</button><button data-tf="1d">1D</button></div>
+          <div class="quote-block"><strong id="activeSymbol">SPY</strong><span id="lastPrice">—</span><span id="spreadText" class="muted">—</span></div>
+        </div>
+        <div id="chart"></div>
+        <div class="attribution">Chart rendering by <a href="https://www.tradingview.com/" target="_blank" rel="noreferrer">TradingView Lightweight Charts™</a>; market data supplied by Alpaca.</div>
+      </section>
+      <section class="lower-grid">
+        <article class="panel analysis-card"><div class="eyebrow">INTELLIGENCE</div><h2>Kronos Analysis</h2><div class="metric-grid"><div><span>Technical score</span><strong id="technicalScore">—</strong></div><div><span>Direction</span><strong id="direction">—</strong></div><div><span>30m momentum</span><strong id="momentum">—</strong></div><div><span>RVOL</span><strong id="rvol">—</strong></div><div><span>ATR %</span><strong id="atrPct">—</strong></div><div><span>Kronos</span><strong id="kronosAnalysisState">Checking</strong></div></div><div class="notice">The next phase will connect ensemble forecast, structure, entry state, stop/targets, and option-fit output from the existing Kronos API.</div></article>
+        <article class="panel options-card"><div class="eyebrow">DERIVATIVES</div><h2>Option Fit</h2><div class="empty-state">Waiting for the option-selector API connection.</div></article>
+        <article class="panel positions-card"><div class="eyebrow">PORTFOLIO</div><h2>Positions</h2><div class="empty-state">Background broker-position synchronization is not enabled in this phase.</div></article>
+      </section>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
