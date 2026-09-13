@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Hanif's Trading Suite</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260913-2249" />
-  <link rel="stylesheet" href="/static/alerts.css?v=20260913-2249" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260913-2258" />
+  <link rel="stylesheet" href="/static/alerts.css?v=20260913-2258" />
   <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -38,9 +38,18 @@
       <section class="lower-grid">
         <article class="panel analysis-card">
           <div class="eyebrow">INTELLIGENCE</div><h2>Kronos Analysis</h2>
-          <div class="metric-grid"><div><span>Technical score</span><strong id="technicalScore">—</strong></div><div><span>Direction</span><strong id="direction">—</strong></div><div><span>30m momentum</span><strong id="momentum">—</strong></div><div><span>RVOL</span><strong id="rvol">—</strong></div><div><span>ATR %</span><strong id="atrPct">—</strong></div><div><span>Kronos</span><strong id="kronosAnalysisState">Checking</strong></div></div>
+          <div class="metric-grid">
+            <div><span>Technical score</span><strong id="technicalScore">—</strong></div>
+            <div><span>Direction</span><strong id="direction">—</strong></div>
+            <div><span>Option side</span><strong id="optionSide">WAIT</strong></div>
+            <div><span>30m momentum</span><strong id="momentum">—</strong></div>
+            <div><span>RVOL</span><strong id="rvol">—</strong></div>
+            <div><span>ATR %</span><strong id="atrPct">—</strong></div>
+            <div><span>Kronos</span><strong id="kronosAnalysisState">Checking</strong></div>
+          </div>
           <div id="setupCard" class="setup-card waiting">
             <div class="setup-header"><span id="setupState">WAITING</span><strong id="setupDirection">—</strong></div>
+            <div id="optionBiasBanner" class="setup-note">OPTION SIDE: WAIT</div>
             <div class="setup-grid">
               <div><span>Entry zone</span><strong id="entryZone">—</strong></div>
               <div><span>No chase</span><strong id="noChase">—</strong></div>
@@ -52,13 +61,14 @@
             <div id="setupNote" class="setup-note">Technical preview only until the Kronos bridge confirms the setup.</div>
           </div>
         </article>
-        <article class="panel options-card"><div class="eyebrow">DERIVATIVES</div><h2>Option Fit</h2><div class="empty-state">Waiting for the option-selector bridge. The selected contract will appear here after Kronos confirms a setup.</div></article>
+        <article class="panel options-card"><div class="eyebrow">DERIVATIVES</div><h2>Option Fit</h2><div id="optionBiasHint" class="empty-state">No directional option bias yet.</div></article>
         <article class="panel positions-card"><div class="eyebrow">PORTFOLIO</div><h2>Positions</h2><div class="empty-state">Robinhood position synchronization will populate this panel next. Exit/thesis alerts will use the same popup system.</div></article>
       </section>
     </section>
   </main>
   <div id="toastStack" class="toast-stack" aria-live="polite"></div>
-  <script src="/static/app.js?v=20260913-2249"></script>
-  <script src="/static/button-fixes.js?v=20260913-2249"></script>
+  <script src="/static/app.js?v=20260913-2258"></script>
+  <script src="/static/button-fixes.js?v=20260913-2258"></script>
+  <script src="/static/option-side.js?v=20260913-2258"></script>
 </body>
 </html>
