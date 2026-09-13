@@ -6,8 +6,8 @@
   const controls = document.createElement('div');
   controls.className = 'kronos-live-controls';
   controls.innerHTML = `
-    <button id="runKronos" type="button" class="ghost-button">Run Kronos</button>
-    <span id="kronosLiveMessage" class="muted">Manual GPU analysis</span>
+    <button id="runKronos" type="button" class="ghost-button">Kronos Forecast</button>
+    <span id="kronosLiveMessage" class="muted">Forecast-only diagnostic</span>
   `;
   heading.insertAdjacentElement('afterend', controls);
 
@@ -54,7 +54,7 @@
     ['kronosScore', 'kronos1h', 'kronos2h', 'kronosPaths', 'kronosStability', 'kronosBias', 'kronosAction']
       .forEach(id => put(id, '—'));
     put('kronosAnalysisState', 'Not run');
-    message.textContent = symbol ? `Run Kronos for ${symbol}` : 'Manual GPU analysis';
+    message.textContent = symbol ? `Forecast-only diagnostic for ${symbol}` : 'Forecast-only diagnostic';
   }
 
   async function readJsonResponse(res) {
@@ -79,7 +79,7 @@
     if (!symbol) return;
 
     button.disabled = true;
-    button.textContent = 'Running Kronos…';
+    button.textContent = 'Running Forecast…';
     message.textContent = `${symbol} GPU forecast in progress`;
     put('kronosAnalysisState', 'Running…');
 
@@ -117,7 +117,7 @@
       console.error(err);
     } finally {
       button.disabled = false;
-      button.textContent = 'Run Kronos';
+      button.textContent = 'Kronos Forecast';
     }
   }
 
