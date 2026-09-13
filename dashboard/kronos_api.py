@@ -12,8 +12,13 @@ from fastapi import APIRouter, HTTPException
 router = APIRouter(prefix="/api/kronos", tags=["kronos"])
 
 KRONOS_ROOT = Path(os.getenv("KRONOS_ROOT", "/home/airomair/Kronos"))
+MARKET_DATA_SCRIPT = KRONOS_ROOT / "trading" / "market_data.py"
 ENSEMBLE_SCRIPT = KRONOS_ROOT / "trading" / "ensemble_forecast.py"
 SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
+
+# The Kronos model is GPU-backed. Keep dashboard-triggered analyses serialized so
+# repeated clicks or multiple browser tabs cannot start overlapping forecasts.
+_ANALYSIS_LOCK = asyncio.Lock()
 
 
 def _number(pattern: str, text: str) -> float | None:
@@ -50,6 +55,7 @@ def _parse_output(symbol: str, output: str) -> dict[str, Any]:
         "runtime_seconds": _number(r"Runtime:\s*([+-]?\d+(?:\.\d+)?)\s*sec", output),
         "peak_gpu_vram_mb": _number(r"Peak GPU VRAM:\s*([+-]?\d+(?:\.\d+)?)\s*MB", output),
         "source": "Kronos ensemble_forecast.py",
+        "market_data_refreshed": True,
         "research_only": True,
     }
     if bullish:
@@ -63,19 +69,12 @@ def _parse_output(symbol: str, output: str) -> dict[str, Any]:
     return result
 
 
-@router.post("/analyze/{symbol}")
-async def analyze(symbol: str) -> dict[str, Any]:
-    symbol = symbol.strip().upper()
-    if not SYMBOL_RE.fullmatch(symbol):
-        raise HTTPException(status_code=400, detail="Invalid symbol")
-    if not ENSEMBLE_SCRIPT.exists():
-        raise HTTPException(status_code=503, detail=f"Kronos ensemble script not found at {ENSEMBLE_SCRIPT}")
-
+async def _run_script(script: Path, symbol: str, timeout: float, label: str) -> str:
     env = os.environ.copy()
     env.setdefault("PYTHONUNBUFFERED", "1")
     process = await asyncio.create_subprocess_exec(
         sys.executable,
-        str(ENSEMBLE_SCRIPT),
+        str(script),
         symbol,
         cwd=str(KRONOS_ROOT),
         env=env,
@@ -83,16 +82,35 @@ async def analyze(symbol: str) -> dict[str, Any]:
         stderr=asyncio.subprocess.STDOUT,
     )
     try:
-        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=45)
+        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout)
     except TimeoutError:
         process.kill()
         await process.communicate()
-        raise HTTPException(status_code=504, detail="Kronos forecast timed out")
+        raise HTTPException(status_code=504, detail=f"{label} timed out")
 
     output = stdout.decode("utf-8", errors="replace")
     if process.returncode != 0:
-        tail = "\n".join(output.strip().splitlines()[-12:])
-        raise HTTPException(status_code=502, detail=f"Kronos forecast failed:\n{tail}")
+        tail = "\n".join(output.strip().splitlines()[-14:])
+        raise HTTPException(status_code=502, detail=f"{label} failed:\n{tail}")
+    return output
+
+
+@router.post("/analyze/{symbol}")
+async def analyze(symbol: str) -> dict[str, Any]:
+    symbol = symbol.strip().upper()
+    if not SYMBOL_RE.fullmatch(symbol):
+        raise HTTPException(status_code=400, detail="Invalid symbol")
+    if not MARKET_DATA_SCRIPT.exists():
+        raise HTTPException(status_code=503, detail=f"Kronos market-data script not found at {MARKET_DATA_SCRIPT}")
+    if not ENSEMBLE_SCRIPT.exists():
+        raise HTTPException(status_code=503, detail=f"Kronos ensemble script not found at {ENSEMBLE_SCRIPT}")
+
+    async with _ANALYSIS_LOCK:
+        # Always refresh the symbol's 5-minute Alpaca data first. This removes the
+        # old requirement to manually run `python trading/market_data.py SYMBOL`
+        # before using the dashboard's Run Kronos button.
+        await _run_script(MARKET_DATA_SCRIPT, symbol, timeout=30, label="Market-data refresh")
+        output = await _run_script(ENSEMBLE_SCRIPT, symbol, timeout=45, label="Kronos forecast")
 
     parsed = _parse_output(symbol, output)
     if parsed.get("final_bias") is None:
