@@ -50,6 +50,30 @@
     setTimeout(() => node.remove(), 14000);
   }
 
+  function resetForSymbol(symbol) {
+    ['kronosScore', 'kronos1h', 'kronos2h', 'kronosPaths', 'kronosStability', 'kronosBias', 'kronosAction']
+      .forEach(id => put(id, '—'));
+    put('kronosAnalysisState', 'Not run');
+    message.textContent = symbol ? `Run Kronos for ${symbol}` : 'Manual GPU analysis';
+  }
+
+  async function readJsonResponse(res) {
+    const contentType = (res.headers.get('content-type') || '').toLowerCase();
+    if (contentType.includes('application/json')) return await res.json();
+
+    const body = await res.text();
+    const looksHtml = /^\s*<!doctype html|^\s*<html/i.test(body);
+    const redirectedToAccess = res.redirected && /cloudflareaccess\.com/i.test(res.url || '');
+
+    if (redirectedToAccess || (looksHtml && /cloudflare|access/i.test(body))) {
+      throw new Error('Cloudflare Access session needs re-authentication. Refresh this page, sign in again, then rerun Kronos.');
+    }
+    if (looksHtml) {
+      throw new Error('Dashboard API returned HTML instead of JSON. Refresh the page; if it persists, pull the latest dashboard code and restart hanif-dashboard.');
+    }
+    throw new Error(`Kronos API returned an unexpected response (HTTP ${res.status}).`);
+  }
+
   async function run() {
     const symbol = (document.getElementById('activeSymbol')?.textContent || '').trim().toUpperCase();
     if (!symbol) return;
@@ -60,8 +84,12 @@
     put('kronosAnalysisState', 'Running…');
 
     try {
-      const res = await fetch(`/api/kronos/analyze/${encodeURIComponent(symbol)}`, { method: 'POST' });
-      const data = await res.json();
+      const res = await fetch(`/api/kronos/analyze/${encodeURIComponent(symbol)}`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Accept': 'application/json' },
+      });
+      const data = await readJsonResponse(res);
       if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
 
       put('kronosScore', data.average_score == null ? '—' : `${Number(data.average_score).toFixed(1)}/100`);
@@ -82,6 +110,7 @@
         css,
       );
     } catch (err) {
+      resetForSymbol(symbol);
       put('kronosAnalysisState', 'Error');
       message.textContent = err.message;
       toast(`${symbol} — Kronos error`, err.message, 'too-late');
@@ -93,4 +122,16 @@
   }
 
   button.addEventListener('click', run);
+
+  const activeSymbol = document.getElementById('activeSymbol');
+  if (activeSymbol) {
+    let previous = activeSymbol.textContent.trim().toUpperCase();
+    new MutationObserver(() => {
+      const current = activeSymbol.textContent.trim().toUpperCase();
+      if (current && current !== previous) {
+        previous = current;
+        resetForSymbol(current);
+      }
+    }).observe(activeSymbol, { childList: true, subtree: true, characterData: true });
+  }
 })();
