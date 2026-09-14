@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hanif's Trading Suite</title>
+  <link rel="stylesheet" href="/static/styles.css?v=20260914-0080" />
+  <link rel="stylesheet" href="/static/alerts.css?v=20260914-0080" />
+  <link rel="stylesheet" href="/static/kronos-live.css?v=20260914-0080" />
+  <link rel="stylesheet" href="/static/fusion-gate.css?v=20260914-0080" />
+  <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div><div class="eyebrow">MNTLOGIC</div><h1>Hanif's Trading Suite</h1></div>
+    <div class="system-status">
+      <button id="enableAlerts" class="pill alert-toggle">Enable browser alerts</button>
+      <span id="alpacaStatus" class="pill">Alpaca …</span>
+      <span id="kronosStatus" class="pill">Kronos …</span>
+      <span id="feedStatus" class="pill">Feed …</span>
+    </div>
+  </header>
+  <main class="layout">
+    <aside class="panel radar-panel">
+      <div class="panel-title-row"><div><div class="eyebrow">DISCOVERY</div><h2>Market Radar</h2></div><button id="refreshRadar" class="ghost-button">Refresh</button></div>
+      <div class="radar-section"><h3>Long candidates</h3><div id="longRadar" class="radar-list"><div class="muted">Loading…</div></div></div>
+      <div class="radar-section"><h3>Short candidates</h3><div id="shortRadar" class="radar-list"><div class="muted">Loading…</div></div></div>
+      <p class="fineprint">Radar is a fast technical pre-filter. Deeper model analysis and risk controls are separate.</p>
+    </aside>
+    <section class="workspace">
+      <section class="panel chart-panel">
+        <div class="chart-toolbar">
+          <form id="symbolForm" class="symbol-form"><input id="symbolInput" value="SPY" maxlength="10" autocomplete="off" aria-label="Symbol" /><button type="submit">Load</button></form>
+          <div class="timeframes" id="timeframes"><button data-tf="1m">1m</button><button data-tf="5m" class="active">5m</button><button data-tf="15m">15m</button><button data-tf="1h">1h</button><button data-tf="1d">1D</button></div>
+          <div class="chart-size-controls" aria-label="Chart size controls">
+            <button id="chartSmaller" type="button" title="Make chart shorter">Chart −</button>
+            <button id="chartLarger" type="button" title="Make chart taller">Chart +</button>
+            <button id="chartReset" type="button" title="Reset chart height">Reset</button>
+            <button id="chartFocus" type="button" title="Use most of the screen for the chart">Focus chart</button>
+          </div>
+          <div class="quote-block"><strong id="activeSymbol">SPY</strong><span id="lastPrice">—</span><span id="spreadText" class="muted">—</span></div>
+        </div>
+        <div id="chart"></div>
+        <div class="chart-resize-note">Tip: drag the chart's lower-right edge to resize vertically, or use Chart + / Chart −.</div>
+        <div class="attribution">Chart rendering by <a href="https://www.tradingview.com/" target="_blank" rel="noreferrer">TradingView Lightweight Charts™</a>; market data supplied by Alpaca.</div>
+      </section>
+      <section class="lower-grid">
+        <article class="panel analysis-card">
+          <div class="eyebrow">INTELLIGENCE</div><h2>Kronos Analysis</h2>
+          <div class="metric-grid">
+            <div><span>Technical score</span><strong id="technicalScore">—</strong></div>
+            <div><span>Direction</span><strong id="direction">—</strong></div>
+            <div><span>Option side</span><strong id="optionSide">WAIT</strong></div>
+            <div><span>30m momentum</span><strong id="momentum">—</strong></div>
+            <div><span>RVOL</span><strong id="rvol">—</strong></div>
+            <div><span>ATR %</span><strong id="atrPct">—</strong></div>
+            <div><span>Kronos</span><strong id="kronosAnalysisState">Checking</strong></div>
+          </div>
+          <div id="setupCard" class="setup-card waiting">
+            <div class="setup-header"><span id="setupState">WAITING</span><strong id="setupDirection">—</strong></div>
+            <div id="optionBiasBanner" class="setup-note">OPTION SIDE: WAIT</div>
+            <div class="setup-grid">
+              <div><span>Entry zone</span><strong id="entryZone">—</strong></div>
+              <div><span>No chase</span><strong id="noChase">—</strong></div>
+              <div><span>Stop</span><strong id="stopLevel">—</strong></div>
+              <div><span>TP1</span><strong id="tp1Level">—</strong></div>
+              <div><span>TP2</span><strong id="tp2Level">—</strong></div>
+              <div><span>TP3</span><strong id="tp3Level">—</strong></div>
+            </div>
+            <div id="setupNote" class="setup-note">Technical preview only until the Kronos bridge confirms the setup.</div>
+          </div>
+        </article>
+        <article class="panel options-card"><div class="eyebrow">DERIVATIVES</div><h2>Option Fit</h2><div id="optionBiasHint" class="empty-state">No directional option bias yet.</div></article>
+        <article class="panel positions-card"><div class="eyebrow">PORTFOLIO</div><h2>Positions</h2><div class="empty-state">Confirmed setup journal loading…</div></article>
+      </section>
+    </section>
+  </main>
+  <div id="toastStack" class="toast-stack" aria-live="polite"></div>
+  <script src="/static/app.js?v=20260914-0080"></script>
+  <script src="/static/button-fixes.js?v=20260914-0080"></script>
+  <script src="/static/option-side.js?v=20260914-0080"></script>
+  <script src="/static/layout-controls.js?v=20260914-0080"></script>
+  <script src="/static/kronos-live.js?v=20260914-0080"></script>
+  <script src="/static/fusion-gate.js?v=20260914-0080"></script>
+  <script src="/static/fusion-ui.js?v=20260914-0080"></script>
+  <script src="/static/setup-journal.js?v=20260914-0080"></script>
+</body>
+</html>

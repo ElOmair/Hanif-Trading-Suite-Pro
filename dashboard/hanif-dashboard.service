@@ -1,0 +1,20 @@
+[Unit]
+Description=Hanif Trading Suite Dashboard
+After=network-online.target kronos-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=airomair
+Group=airomair
+WorkingDirectory=/home/airomair/Hanif-Trading-Suite-Pro/dashboard
+EnvironmentFile=-/home/airomair/Kronos/.env
+Environment=KRONOS_API_URL=http://127.0.0.1:8000
+ExecStart=/home/airomair/kronos-venv/bin/uvicorn app:app --host 127.0.0.1 --port 8080
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
