@@ -82,6 +82,16 @@
     }
   }
 
+  function applyOpeningLockout(gate) {
+    const card = document.getElementById('setupCard');
+    if (card) card.className = 'setup-card too-late';
+    put('setupState', 'OPENING LOCKOUT');
+    put('setupDirection', 'OBSERVE');
+    put('optionSide', 'LOCKED');
+    put('optionBiasBanner', 'OPTION SIDE: LOCKED UNTIL 9:35 ET');
+    put('setupNote', gate?.reason || 'First 5-minute regular-session candle is still developing. No actionable setup until 9:35 ET.');
+  }
+
   function ensureUi() {
     const controls = document.querySelector('.kronos-live-controls');
     const optionCard = document.querySelector('.options-card');
@@ -166,10 +176,25 @@
         const kronos = data.kronos || {};
         const tradePlan = data.trade_plan || {};
         const options = Array.isArray(data.options) ? data.options : [];
-        const chase = noChaseState(technical, tradePlan);
+        const marketGate = data.market_gate || {};
 
         syncKronosPanel(kronos);
 
+        if (marketGate.active) {
+          applyOpeningLockout(marketGate);
+          const gateTime = marketGate.et_time
+            ? new Date(marketGate.et_time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit', timeZone: 'America/New_York' })
+            : 'now';
+          host.innerHTML = `
+            <div><strong>OPENING CANDLE LOCKOUT</strong></div>
+            <div class="fineprint">${symbol} · ${gateTime} ET · Technical ${technical.signal || '—'} · Kronos ${kronos.final_bias || '—'}</div>
+            <div class="fineprint" style="margin-top:10px"><strong>NO ENTRY / NO CONFIRM / OPTION SCAN LOCKED</strong></div>
+            <div class="fineprint">The first 5-minute regular-session candle is still developing. Kronos forecast data remains visible for context, but the trade pipeline cannot produce an actionable setup until 9:35 ET.</div>
+          `;
+          return;
+        }
+
+        const chase = noChaseState(technical, tradePlan);
         let html = `<div><strong>Decision Engine: ${label}</strong></div>`;
         html += `<div class="fineprint">Technical: ${technical.signal || '—'} · Kronos: ${kronos.final_bias || '—'} · Stability: ${kronos.stability || '—'}</div>`;
 
