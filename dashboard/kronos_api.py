@@ -6,8 +6,10 @@ import importlib
 import os
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
@@ -19,6 +21,7 @@ ENSEMBLE_SCRIPT = KRONOS_ROOT / "trading" / "ensemble_forecast.py"
 MARKET_DATA_SCRIPT = KRONOS_ROOT / "trading" / "market_data.py"
 DATA_DIR = KRONOS_ROOT / "trading" / "data"
 SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
+ET = ZoneInfo("America/New_York")
 _analysis_lock = asyncio.Lock()
 
 
@@ -53,6 +56,27 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return str(value)
+
+
+def _opening_market_gate() -> dict[str, Any]:
+    now = datetime.now(ET)
+    seconds_from_midnight = now.hour * 3600 + now.minute * 60 + now.second
+    start = 9 * 3600 + 30 * 60
+    end = 9 * 3600 + 35 * 60
+    active = now.weekday() < 5 and start <= seconds_from_midnight < end
+    return {
+        "active": active,
+        "state": "OPENING_LOCKOUT" if active else "NORMAL",
+        "et_time": now.isoformat(),
+        "lockout_start_et": "09:30:00",
+        "lockout_end_et": "09:35:00",
+        "reason": (
+            "The first 5-minute regular-session candle is still developing. "
+            "Kronos forecast data is informational only; CONFIRM, trade plans, and option scans are locked until 09:35 ET."
+            if active
+            else None
+        ),
+    }
 
 
 def _parse_output(symbol: str, output: str) -> dict[str, Any]:
@@ -273,6 +297,24 @@ async def fusion(
     symbol = symbol.strip().upper()
     kronos = await run_kronos_analysis(symbol)
     alert = _directional_features(symbol)
+    market_gate = _opening_market_gate()
+
+    if market_gate["active"]:
+        return {
+            "symbol": symbol,
+            "technical": _jsonable(alert),
+            "kronos": _jsonable(kronos),
+            "decision": {
+                "decision": "WATCH",
+                "reason": market_gate["reason"],
+            },
+            "trade_plan": None,
+            "options": [],
+            "option_scan_ran": False,
+            "market_gate": market_gate,
+            "research_only": True,
+            "note": "Opening lockout active. No actionable setup is produced until the first 5-minute candle closes at 09:35 ET.",
+        }
 
     if alert["signal"] == "NEUTRAL":
         return {
@@ -283,6 +325,7 @@ async def fusion(
             "trade_plan": None,
             "options": [],
             "option_scan_ran": False,
+            "market_gate": market_gate,
             "research_only": True,
         }
 
@@ -325,6 +368,7 @@ async def fusion(
         "trade_plan": _jsonable(trade_plan),
         "options": _jsonable(options),
         "option_scan_ran": option_scan_ran,
+        "market_gate": market_gate,
         "research_only": True,
         "note": "Option candidates are mechanical model fits. No order is placed by this dashboard.",
     }
