@@ -6,7 +6,7 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 import pandas as pd
@@ -37,19 +37,38 @@ def _feed() -> DataFeed:
     return DataFeed.SIP if os.getenv("ALPACA_DATA_FEED", "iex").strip().lower() == "sip" else DataFeed.IEX
 
 
+def _env_float(name: str, default: float, minimum: float) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, value)
+
+
 API_KEY = os.getenv("ALPACA_API_KEY", "").strip()
 API_SECRET = os.getenv("ALPACA_SECRET_KEY", "").strip()
 KRONOS_API_URL = os.getenv("KRONOS_API_URL", "http://127.0.0.1:8000").rstrip("/")
 RADAR_UNIVERSE = [s.strip().upper() for s in os.getenv("RADAR_UNIVERSE", DEFAULT_UNIVERSE).split(",") if s.strip()]
+BARS_CACHE_TTL = _env_float("BARS_CACHE_TTL_SECONDS", 5.0, 1.0)
+TICK_CACHE_TTL = _env_float("TICK_CACHE_TTL_SECONDS", 2.0, 0.5)
+RADAR_CACHE_TTL = _env_float("RADAR_CACHE_TTL_SECONDS", 60.0, 10.0)
+WS_POLL_SECONDS = _env_float("WS_POLL_SECONDS", 1.0, 0.5)
 
 alpaca: StockHistoricalDataClient | None = None
 if API_KEY and API_SECRET:
     alpaca = StockHistoricalDataClient(API_KEY, API_SECRET)
 
-app = FastAPI(title="Hanif Trading Suite Dashboard", version="0.1.0")
+app = FastAPI(title="Hanif Trading Suite Dashboard", version="0.2.0")
 app.include_router(kronos_router)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
+
 _radar_cache: dict[str, Any] = {"expires": 0.0, "data": None}
+_bars_cache: dict[tuple[str, str, int], dict[str, Any]] = {}
+_tick_cache: dict[str, dict[str, Any]] = {}
+_radar_lock = asyncio.Lock()
+_bars_lock = asyncio.Lock()
+_tick_lock = asyncio.Lock()
+_alpaca_semaphore = asyncio.Semaphore(4)
 
 
 def require_alpaca() -> StockHistoricalDataClient:
@@ -162,6 +181,98 @@ def _technical_snapshot(frame: pd.DataFrame, symbol: str) -> dict[str, Any] | No
     }
 
 
+def _is_rate_limit_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    status_code = getattr(exc, "status_code", None)
+    response = getattr(exc, "response", None)
+    response_status = getattr(response, "status_code", None) if response is not None else None
+    return status_code == 429 or response_status == 429 or "too many requests" in text or "429" in text
+
+
+async def _alpaca_call(func: Callable[..., Any], *args: Any) -> Any:
+    delays = (0.0, 0.6, 1.5)
+    last_exc: Exception | None = None
+    for attempt, delay in enumerate(delays):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            async with _alpaca_semaphore:
+                return await asyncio.to_thread(func, *args)
+        except Exception as exc:
+            last_exc = exc
+            if not _is_rate_limit_error(exc) or attempt == len(delays) - 1:
+                raise
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("Alpaca request failed without an exception")
+
+
+def _cached_copy(entry: dict[str, Any], *, stale: bool = False, rate_limited: bool = False) -> dict[str, Any]:
+    payload = dict(entry["data"])
+    payload["cached"] = True
+    payload["stale"] = stale
+    if rate_limited:
+        payload["rate_limited"] = True
+    return payload
+
+
+async def _get_tick_payload(symbol: str) -> dict[str, Any]:
+    now = time.monotonic()
+    cached = _tick_cache.get(symbol)
+    if cached and now < cached["expires"]:
+        return _cached_copy(cached)
+
+    async with _tick_lock:
+        now = time.monotonic()
+        cached = _tick_cache.get(symbol)
+        if cached and now < cached["expires"]:
+            return _cached_copy(cached)
+
+        client = require_alpaca()
+        quote_req = StockLatestQuoteRequest(symbol_or_symbols=symbol, feed=_feed())
+        bar_req = StockLatestBarRequest(symbol_or_symbols=symbol, feed=_feed())
+        try:
+            quote_map, bar_map = await asyncio.gather(
+                _alpaca_call(client.get_stock_latest_quote, quote_req),
+                _alpaca_call(client.get_stock_latest_bar, bar_req),
+            )
+        except Exception as exc:
+            if cached and _is_rate_limit_error(exc):
+                return _cached_copy(cached, stale=True, rate_limited=True)
+            if _is_rate_limit_error(exc):
+                raise HTTPException(status_code=429, detail="Alpaca rate limit reached; retry shortly.") from exc
+            raise
+
+        quote = quote_map.get(symbol)
+        bar = bar_map.get(symbol)
+        payload: dict[str, Any] = {"symbol": symbol, "cached": False, "stale": False}
+        if quote is not None:
+            bid, ask = float(quote.bid_price or 0), float(quote.ask_price or 0)
+            mid = (bid + ask) / 2.0 if bid and ask else (ask or bid)
+            payload["quote"] = {
+                "bid": bid,
+                "ask": ask,
+                "mid": round(mid, 4) if mid else 0,
+                "bid_size": float(quote.bid_size or 0),
+                "ask_size": float(quote.ask_size or 0),
+                "timestamp": quote.timestamp.isoformat() if quote.timestamp else None,
+            }
+        if bar is not None:
+            ts = pd.Timestamp(bar.timestamp)
+            if ts.tzinfo is None:
+                ts = ts.tz_localize("UTC")
+            payload["bar"] = {
+                "time": int(ts.timestamp()),
+                "open": float(bar.open),
+                "high": float(bar.high),
+                "low": float(bar.low),
+                "close": float(bar.close),
+                "volume": float(bar.volume),
+            }
+        _tick_cache[symbol] = {"expires": time.monotonic() + TICK_CACHE_TTL, "data": payload}
+        return payload
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(ROOT / "static" / "index.html")
@@ -172,9 +283,15 @@ def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "service": "hanif-trading-dashboard",
-        "version": "0.1.0",
+        "version": "0.2.0",
         "alpaca_configured": alpaca is not None,
         "feed": os.getenv("ALPACA_DATA_FEED", "iex").lower(),
+        "market_data_cache": {
+            "bars_ttl_seconds": BARS_CACHE_TTL,
+            "tick_ttl_seconds": TICK_CACHE_TTL,
+            "radar_ttl_seconds": RADAR_CACHE_TTL,
+            "ws_poll_seconds": WS_POLL_SECONDS,
+        },
     }
 
 
@@ -193,45 +310,50 @@ async def system_status() -> dict[str, Any]:
 @app.get("/api/bars/{symbol}")
 async def bars(symbol: str, timeframe: str = Query("5m"), limit: int = Query(400, ge=50, le=1000)) -> dict[str, Any]:
     symbol = normalize_symbol(symbol)
-    client = require_alpaca()
-    request = StockBarsRequest(
-        symbol_or_symbols=symbol,
-        timeframe=timeframe_from_text(timeframe),
-        start=start_for_timeframe(timeframe, limit),
-        feed=_feed(),
-    )
-    barset = await asyncio.to_thread(client.get_stock_bars, request)
-    return {"symbol": symbol, "timeframe": timeframe.lower(), "bars": bars_to_rows(barset.df, symbol, limit)}
+    timeframe_key = timeframe.strip().lower()
+    cache_key = (symbol, timeframe_key, limit)
+    now = time.monotonic()
+    cached = _bars_cache.get(cache_key)
+    if cached and now < cached["expires"]:
+        return _cached_copy(cached)
+
+    async with _bars_lock:
+        now = time.monotonic()
+        cached = _bars_cache.get(cache_key)
+        if cached and now < cached["expires"]:
+            return _cached_copy(cached)
+
+        client = require_alpaca()
+        request = StockBarsRequest(
+            symbol_or_symbols=symbol,
+            timeframe=timeframe_from_text(timeframe_key),
+            start=start_for_timeframe(timeframe_key, limit),
+            feed=_feed(),
+        )
+        try:
+            barset = await _alpaca_call(client.get_stock_bars, request)
+        except Exception as exc:
+            if cached and _is_rate_limit_error(exc):
+                return _cached_copy(cached, stale=True, rate_limited=True)
+            if _is_rate_limit_error(exc):
+                raise HTTPException(status_code=429, detail="Alpaca rate limit reached; retry shortly.") from exc
+            raise
+
+        payload = {
+            "symbol": symbol,
+            "timeframe": timeframe_key,
+            "bars": bars_to_rows(barset.df, symbol, limit),
+            "cached": False,
+            "stale": False,
+        }
+        _bars_cache[cache_key] = {"expires": time.monotonic() + BARS_CACHE_TTL, "data": payload}
+        return payload
 
 
 @app.get("/api/tick/{symbol}")
 async def tick(symbol: str) -> dict[str, Any]:
     symbol = normalize_symbol(symbol)
-    client = require_alpaca()
-    quote_req = StockLatestQuoteRequest(symbol_or_symbols=symbol, feed=_feed())
-    bar_req = StockLatestBarRequest(symbol_or_symbols=symbol, feed=_feed())
-    quote_map, bar_map = await asyncio.gather(
-        asyncio.to_thread(client.get_stock_latest_quote, quote_req),
-        asyncio.to_thread(client.get_stock_latest_bar, bar_req),
-    )
-    quote = quote_map.get(symbol)
-    bar = bar_map.get(symbol)
-    payload: dict[str, Any] = {"symbol": symbol}
-    if quote is not None:
-        payload["quote"] = {
-            "bid": float(quote.bid_price or 0), "ask": float(quote.ask_price or 0),
-            "bid_size": float(quote.bid_size or 0), "ask_size": float(quote.ask_size or 0),
-            "timestamp": quote.timestamp.isoformat() if quote.timestamp else None,
-        }
-    if bar is not None:
-        ts = pd.Timestamp(bar.timestamp)
-        if ts.tzinfo is None:
-            ts = ts.tz_localize("UTC")
-        payload["bar"] = {
-            "time": int(ts.timestamp()), "open": float(bar.open), "high": float(bar.high),
-            "low": float(bar.low), "close": float(bar.close), "volume": float(bar.volume),
-        }
-    return payload
+    return await _get_tick_payload(symbol)
 
 
 @app.get("/api/radar")
@@ -240,39 +362,69 @@ async def radar(limit: int = Query(8, ge=3, le=20)) -> dict[str, Any]:
     if _radar_cache["data"] is not None and now < _radar_cache["expires"]:
         cached = dict(_radar_cache["data"])
         cached["cached"] = True
+        cached["stale"] = False
         cached["longs"] = cached["longs"][:limit]
         cached["shorts"] = cached["shorts"][:limit]
         return cached
 
-    client = require_alpaca()
-    request = StockBarsRequest(
-        symbol_or_symbols=RADAR_UNIVERSE,
-        timeframe=TimeFrame(5, TimeFrameUnit.Minute),
-        start=datetime.now(timezone.utc) - timedelta(days=7),
-        feed=_feed(),
-    )
-    barset = await asyncio.to_thread(client.get_stock_bars, request)
-    df = barset.df.reset_index() if not barset.df.empty else pd.DataFrame()
-    snapshots = []
-    if not df.empty and "symbol" in df.columns:
-        for symbol_name, frame in df.groupby("symbol", sort=False):
-            snapshot = _technical_snapshot(frame, str(symbol_name))
-            if snapshot:
-                snapshots.append(snapshot)
+    async with _radar_lock:
+        now = time.monotonic()
+        if _radar_cache["data"] is not None and now < _radar_cache["expires"]:
+            cached = dict(_radar_cache["data"])
+            cached["cached"] = True
+            cached["stale"] = False
+            cached["longs"] = cached["longs"][:limit]
+            cached["shorts"] = cached["shorts"][:limit]
+            return cached
 
-    longs = sorted((s for s in snapshots if s["direction"] == "LONG"), key=lambda x: x["rank_score"], reverse=True)
-    shorts = sorted((s for s in snapshots if s["direction"] == "SHORT"), key=lambda x: x["rank_score"], reverse=True)
-    data = {
-        "generated_at": datetime.now(timezone.utc).isoformat(), "feed": _feed().value,
-        "universe_size": len(RADAR_UNIVERSE), "longs": longs, "shorts": shorts,
-        "cached": False, "note": "Radar score is a fast technical pre-filter, not a trade recommendation.",
-    }
-    _radar_cache["data"] = data
-    _radar_cache["expires"] = now + 60.0
-    result = dict(data)
-    result["longs"] = longs[:limit]
-    result["shorts"] = shorts[:limit]
-    return result
+        client = require_alpaca()
+        request = StockBarsRequest(
+            symbol_or_symbols=RADAR_UNIVERSE,
+            timeframe=TimeFrame(5, TimeFrameUnit.Minute),
+            start=datetime.now(timezone.utc) - timedelta(days=7),
+            feed=_feed(),
+        )
+        try:
+            barset = await _alpaca_call(client.get_stock_bars, request)
+        except Exception as exc:
+            if _radar_cache["data"] is not None and _is_rate_limit_error(exc):
+                stale = dict(_radar_cache["data"])
+                stale["cached"] = True
+                stale["stale"] = True
+                stale["rate_limited"] = True
+                stale["longs"] = stale["longs"][:limit]
+                stale["shorts"] = stale["shorts"][:limit]
+                return stale
+            if _is_rate_limit_error(exc):
+                raise HTTPException(status_code=429, detail="Alpaca rate limit reached; retry shortly.") from exc
+            raise
+
+        df = barset.df.reset_index() if not barset.df.empty else pd.DataFrame()
+        snapshots = []
+        if not df.empty and "symbol" in df.columns:
+            for symbol_name, frame in df.groupby("symbol", sort=False):
+                snapshot = _technical_snapshot(frame, str(symbol_name))
+                if snapshot:
+                    snapshots.append(snapshot)
+
+        longs = sorted((s for s in snapshots if s["direction"] == "LONG"), key=lambda x: x["rank_score"], reverse=True)
+        shorts = sorted((s for s in snapshots if s["direction"] == "SHORT"), key=lambda x: x["rank_score"], reverse=True)
+        data = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "feed": _feed().value,
+            "universe_size": len(RADAR_UNIVERSE),
+            "longs": longs,
+            "shorts": shorts,
+            "cached": False,
+            "stale": False,
+            "note": "Radar score is a fast technical pre-filter, not a trade recommendation.",
+        }
+        _radar_cache["data"] = data
+        _radar_cache["expires"] = time.monotonic() + RADAR_CACHE_TTL
+        result = dict(data)
+        result["longs"] = longs[:limit]
+        result["shorts"] = shorts[:limit]
+        return result
 
 
 @app.websocket("/ws/market/{symbol}")
@@ -287,32 +439,24 @@ async def market_socket(websocket: WebSocket, symbol: str) -> None:
         return
 
     await websocket.accept()
-    client = require_alpaca()
     try:
         while True:
-            quote_req = StockLatestQuoteRequest(symbol_or_symbols=symbol, feed=_feed())
-            bar_req = StockLatestBarRequest(symbol_or_symbols=symbol, feed=_feed())
-            quote_map, bar_map = await asyncio.gather(
-                asyncio.to_thread(client.get_stock_latest_quote, quote_req),
-                asyncio.to_thread(client.get_stock_latest_bar, bar_req),
-            )
-            quote = quote_map.get(symbol)
-            bar = bar_map.get(symbol)
-            message: dict[str, Any] = {"type": "market", "symbol": symbol}
-            if quote is not None:
-                bid, ask = float(quote.bid_price or 0), float(quote.ask_price or 0)
-                mid = (bid + ask) / 2.0 if bid and ask else (ask or bid)
-                message["quote"] = {"bid": bid, "ask": ask, "mid": round(mid, 4) if mid else 0, "timestamp": quote.timestamp.isoformat() if quote.timestamp else None}
-            if bar is not None:
-                ts = pd.Timestamp(bar.timestamp)
-                if ts.tzinfo is None:
-                    ts = ts.tz_localize("UTC")
-                message["bar"] = {
-                    "time": int(ts.timestamp()), "open": float(bar.open), "high": float(bar.high),
-                    "low": float(bar.low), "close": float(bar.close), "volume": float(bar.volume),
-                }
-            await websocket.send_json(message)
-            await asyncio.sleep(1.0)
+            try:
+                payload = await _get_tick_payload(symbol)
+                message = {"type": "market", **payload}
+                await websocket.send_json(message)
+            except HTTPException as exc:
+                if exc.status_code == 429:
+                    await websocket.send_json({
+                        "type": "market_status",
+                        "symbol": symbol,
+                        "rate_limited": True,
+                        "detail": exc.detail,
+                    })
+                    await asyncio.sleep(max(2.0, TICK_CACHE_TTL))
+                    continue
+                raise
+            await asyncio.sleep(WS_POLL_SECONDS)
     except WebSocketDisconnect:
         return
     except Exception:
