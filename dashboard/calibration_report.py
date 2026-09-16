@@ -5,7 +5,8 @@ import json
 import os
 
 from calibration_policy import build_calibration_policy
-from signal_store import calibration_summary
+from layer_calibration import summarize_layer_effectiveness
+from signal_store import calibration_summary, list_signals
 
 
 def _env_float(name: str, default: float) -> float:
@@ -31,11 +32,19 @@ def build_report(symbol: str | None = None, limit: int = 1000) -> dict:
         min_resolved_samples=_env_int("MNT_CALIBRATION_MIN_RESOLVED", 30),
         target_win_rate_pct=_env_float("MNT_CALIBRATION_TARGET_WIN_RATE", 55.0),
     )
-    return {"summary": summary, "policy": policy}
+    history = list_signals(symbol=symbol, limit=limit)
+    layers = summarize_layer_effectiveness(
+        history,
+        supportive_score=_env_float("MNT_LAYER_SUPPORTIVE_SCORE", 60.0),
+        min_samples=_env_int("MNT_LAYER_MIN_SAMPLES", 10),
+    )
+    return {"summary": summary, "policy": policy, "layer_effectiveness": layers}
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Print MnT signal calibration and shadow threshold recommendations.")
+    parser = argparse.ArgumentParser(
+        description="Print MnT outcome calibration, shadow threshold recommendations, and layer effectiveness."
+    )
     parser.add_argument("--symbol", help="Optional ticker to calibrate separately, e.g. SPY")
     parser.add_argument("--limit", type=int, default=1000, help="Maximum historical signals to inspect")
     args = parser.parse_args()
