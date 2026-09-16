@@ -2,7 +2,6 @@
   const originalFetch = window.fetch.bind(window);
   const number = value => Number.isFinite(Number(value)) ? Number(value) : null;
   const money = value => number(value) == null ? '—' : `$${number(value).toFixed(2)}`;
-  const pct = value => number(value) == null ? '—' : `${number(value) >= 0 ? '+' : ''}${number(value).toFixed(2)}%`;
 
   function pick(obj, keys) {
     if (!obj || typeof obj !== 'object') return undefined;
@@ -19,8 +18,8 @@
   function candidateDebit(candidate) {
     const ask = number(pick(candidate, ['ask', 'ask_price']));
     const bid = number(pick(candidate, ['bid', 'bid_price']));
-    if (ask && ask > 0) return ask * 100;
-    if (ask && bid && ask > 0 && bid > 0) return ((ask + bid) / 2) * 100;
+    if (ask != null && ask > 0) return ask * 100;
+    if (ask != null && bid != null && ask > 0 && bid > 0) return ((ask + bid) / 2) * 100;
     return null;
   }
 
@@ -52,6 +51,12 @@
         <div><div class="eyebrow">MNT BEGINNER COACH</div><h3>What should I do?</h3></div>
         <span id="mntCoachState" class="mnt-coach-state wait">WAITING</span>
       </div>
+      <div id="mntScoreStrip" class="mnt-score-strip" aria-live="polite">
+        <div class="mnt-score-box"><span class="mnt-score-label">MnT score</span><strong id="mntScoreValue">—</strong><span>/100</span></div>
+        <div class="mnt-score-box"><span class="mnt-score-label">Data coverage</span><strong id="mntCoverageValue">—</strong><span>%</span></div>
+        <div class="mnt-score-box wide"><span class="mnt-score-label">Quality</span><strong id="mntGradeValue">WAITING</strong></div>
+      </div>
+      <div id="mntCoverageNote" class="mnt-coverage-note">MnT will show which professional data layers were actually available for this setup.</div>
       <div id="mntCoachAction" class="mnt-coach-action">Run “Analyze Trade Setup” and MnT will explain the result in plain English.</div>
       <ol id="mntCoachSteps" class="mnt-coach-steps"></ol>
       <div id="mntCoachWhy" class="mnt-coach-why"></div>
@@ -94,7 +99,7 @@
   function gammaExplanation(data) {
     const gamma = data?.gamma;
     if (!gamma || gamma.available === false || gamma.status === 'not_configured') {
-      return '<div class="mnt-layer-note"><strong>Gamma layer:</strong> not connected yet. MnT is <strong>not</strong> pretending to know dealer gamma and is not using gamma in this result. Once a real gamma feed is connected, this section will explain whether dealer hedging may slow price down or make a move accelerate.</div>';
+      return '<div class="mnt-layer-note"><strong>Gamma:</strong> unavailable for this result. MnT removed its gamma weight instead of scoring missing data as bearish.</div>';
     }
 
     const regime = String(gamma.regime || gamma.gamma_regime || '').toUpperCase();
@@ -104,7 +109,51 @@
     let simple = 'Gamma is connected, but the current dealer pressure is mixed.';
     if (regime.includes('NEGATIVE') || regime.includes('EXPANSION')) simple = 'Dealer hedging may help price move faster than normal, so breakouts and breakdowns can accelerate.';
     if (regime.includes('POSITIVE') || regime.includes('PIN')) simple = 'Dealer hedging may slow price down and keep it trapped near important strikes.';
-    return `<div class="mnt-layer-note"><strong>Gamma layer:</strong> ${simple}${zero != null ? ` Gamma flip: ${money(zero)}.` : ''}${callWall != null ? ` Call wall: ${money(callWall)}.` : ''}${putWall != null ? ` Put wall: ${money(putWall)}.` : ''}</div>`;
+    return `<div class="mnt-layer-note"><strong>Gamma:</strong> ${simple}${zero != null ? ` Flip ${money(zero)}.` : ''}${callWall != null ? ` Call wall ${money(callWall)}.` : ''}${putWall != null ? ` Put wall ${money(putWall)}.` : ''}</div>`;
+  }
+
+  function flowExplanation(data) {
+    const flow = data?.flow;
+    if (!flow || flow.available === false) {
+      const reason = flow?.reason ? ` ${flow.reason}` : '';
+      return `<div class="mnt-layer-note"><strong>Options flow:</strong> unavailable for this result. MnT removed the flow weight rather than guessing.${reason}</div>`;
+    }
+    const sentiment = String(flow.sentiment || 'NEUTRAL').toUpperCase();
+    const ratio = number(flow.directional_ratio);
+    const bullish = number(flow.bullish_premium);
+    const bearish = number(flow.bearish_premium);
+    const simple = flow.beginner_explanation || (sentiment === 'BULLISH'
+      ? 'Options activity is leaning bullish.'
+      : sentiment === 'BEARISH'
+        ? 'Options activity is leaning bearish.'
+        : 'Options activity is mixed.');
+    return `<div class="mnt-layer-note"><strong>Options flow:</strong> ${simple}${ratio != null ? ` Directional reading ${ratio > 0 ? '+' : ''}${ratio.toFixed(2)}.` : ''}${bullish != null && bearish != null ? ` Bullish premium ${money(bullish)} vs bearish premium ${money(bearish)}.` : ''}</div>`;
+  }
+
+  function marketExplanation(data) {
+    const market = data?.market_regime;
+    if (!market || market.available === false) return '';
+    return `<div class="mnt-layer-note"><strong>Broader market:</strong> ${market.beginner_explanation || `Current market bias is ${String(market.sentiment || 'mixed').toLowerCase()}.`}</div>`;
+  }
+
+  function renderScore(scoreData) {
+    const score = number(scoreData?.score);
+    const coverage = number(scoreData?.coverage_pct);
+    const grade = String(scoreData?.grade || 'UNKNOWN').replaceAll('_', ' ');
+    const missing = Array.isArray(scoreData?.missing_layers) ? scoreData.missing_layers : [];
+    const scoreEl = document.getElementById('mntScoreValue');
+    const coverageEl = document.getElementById('mntCoverageValue');
+    const gradeEl = document.getElementById('mntGradeValue');
+    const noteEl = document.getElementById('mntCoverageNote');
+    if (scoreEl) scoreEl.textContent = score == null ? '—' : score.toFixed(0);
+    if (coverageEl) coverageEl.textContent = coverage == null ? '—' : coverage.toFixed(0);
+    if (gradeEl) gradeEl.textContent = grade;
+    if (noteEl) {
+      if (coverage == null) noteEl.textContent = 'No coverage calculation was returned.';
+      else if (!missing.length) noteEl.textContent = `All MnT scoring layers used in this setup were available. Coverage: ${coverage.toFixed(0)}%.`;
+      else noteEl.textContent = `Coverage ${coverage.toFixed(0)}%. Missing/reweighted layers: ${missing.join(', ')}. Missing data is not scored as zero.`;
+      noteEl.className = `mnt-coverage-note ${coverage != null && coverage < 50 ? 'low' : coverage != null && coverage >= 80 ? 'high' : ''}`;
+    }
   }
 
   function render(data) {
@@ -117,12 +166,17 @@
 
     const technical = data.technical || {};
     const kronos = data.kronos || {};
+    const fusionScore = data.fusion_score || {};
     const tradePlan = data.trade_plan || {};
     const options = Array.isArray(data.options) ? data.options : [];
     const gate = data.market_gate || {};
     const decision = labelDecision(data.decision);
     const chase = noChase(technical, tradePlan);
     const directionWord = chase.direction === 'LONG' ? 'higher' : chase.direction === 'SHORT' ? 'lower' : 'either direction';
+    const mntScore = number(fusionScore.score);
+    const coverage = number(fusionScore.coverage_pct);
+
+    renderScore(fusionScore);
 
     let stateText = 'KEEP AN EYE ON THIS';
     let stateClass = 'wait';
@@ -134,12 +188,21 @@
       action = 'Do not enter yet. The first five minutes after the market opens can move very fast and give false signals.';
       steps.push('Wait until after 9:35 ET so the first five-minute candle can finish.');
       steps.push('Run the setup again after the opening lockout ends.');
+    } else if (coverage != null && coverage < 45) {
+      stateText = 'WAIT — NOT ENOUGH DATA';
+      action = 'The setup may look interesting, but too many MnT data layers are missing to treat the score as reliable.';
+      steps.push('Do not use the score by itself. Recheck when more market, Gamma, flow, or contract data is available.');
     } else if (decision.includes('REJECT')) {
       stateText = 'SKIP THIS TRADE';
       stateClass = 'stop';
       action = 'The setup does not pass MnT’s safety checks right now.';
       steps.push('Do not try to make the trade fit. Move on and wait for another setup.');
       steps.push('Recheck later only if price structure changes and MnT produces a new setup.');
+    } else if (mntScore != null && mntScore < 62) {
+      stateText = 'WAIT — TOO MANY CONFLICTS';
+      stateClass = 'stop';
+      action = `The Decision Engine may see part of a setup, but the full MnT quality score is only ${mntScore.toFixed(0)}/100.`;
+      steps.push('Wait for more layers to align instead of forcing an entry.');
     } else if (!decision.includes('CONFIRM')) {
       stateText = 'GET READY — DON’T BUY YET';
       action = `MnT sees a possible move ${directionWord}, but the setup has not fully confirmed.`;
@@ -153,7 +216,7 @@
       steps.push(`Current price is about ${money(chase.price)} and the no-chase level is ${money(chase.limit)}.`);
       steps.push('Wait for a pullback/retest or a completely new setup instead of paying up after the move.');
     } else {
-      stateText = 'ENTRY CONDITIONS MET';
+      stateText = mntScore != null && mntScore >= 86 ? 'HIGH-QUALITY SETUP — REVIEW ENTRY' : 'ENTRY CONDITIONS MET';
       stateClass = 'ready';
       action = `MnT’s current checks agree enough to review a ${chase.direction === 'LONG' ? 'bullish' : 'bearish'} trade plan.`;
       if (chase.low != null && chase.high != null) steps.push(`Stay near the planned entry area: ${money(chase.low)}–${money(chase.high)}.`);
@@ -187,8 +250,10 @@
       <h4>Why MnT is saying this</h4>
       <div class="mnt-checks">${checks.map(check => `<div class="mnt-check">${check}</div>`).join('')}</div>
       ${gammaExplanation(data)}
-      <div class="mnt-layer-note"><strong>Plain-English rule:</strong> MnT can use professional trading math in the background, but every alert should tell you what is happening, what to do now, where the risk is, and what would cancel the idea.</div>
-      <details class="mnt-advanced"><summary>Show professional details</summary><pre>${JSON.stringify({ technical, kronos, decision: data.decision, trade_plan: tradePlan }, null, 2)}</pre></details>
+      ${flowExplanation(data)}
+      ${marketExplanation(data)}
+      <div class="mnt-layer-note"><strong>Scoring rule:</strong> MnT reweights only the layers that actually returned data. The score is a setup-quality measure, not a guarantee that a trade will win.</div>
+      <details class="mnt-advanced"><summary>Show professional details</summary><pre>${JSON.stringify({ fusion_score: fusionScore, technical, kronos, gamma: data.gamma, flow: data.flow, market_regime: data.market_regime, decision: data.decision, trade_plan: tradePlan }, null, 2)}</pre></details>
     `;
   }
 
