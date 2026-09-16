@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 
+from flow_provider import fetch_flow_context
 from gamma_provider import fetch_gamma_context
 from mnt_engine import build_fusion_score
 from signal_store import list_signals, record_signal
@@ -314,14 +315,6 @@ def _market_regime() -> dict[str, Any]:
     }
 
 
-def _flow_context() -> dict[str, Any]:
-    return {
-        "available": False,
-        "status": "not_configured",
-        "reason": "Live options-flow scoring is not connected to the deployable MnT server yet.",
-    }
-
-
 def _decision_label(decision: Any) -> str:
     if isinstance(decision, dict):
         for key in ("decision", "action", "state", "status"):
@@ -360,6 +353,14 @@ async def gamma(symbol: str, spot: float | None = Query(None, gt=0)) -> dict[str
     return await fetch_gamma_context(symbol, spot)
 
 
+@router.get("/flow/{symbol}")
+async def flow(symbol: str) -> dict[str, Any]:
+    symbol = symbol.strip().upper()
+    if not SYMBOL_RE.fullmatch(symbol):
+        raise HTTPException(status_code=400, detail="Invalid symbol")
+    return await fetch_flow_context(symbol)
+
+
 @router.get("/market-regime")
 async def market_regime() -> dict[str, Any]:
     return _market_regime()
@@ -384,14 +385,17 @@ async def fusion(
     max_contract_cost: float | None = Query(None, gt=0, le=100000),
 ) -> dict[str, Any]:
     symbol = symbol.strip().upper()
+    if not SYMBOL_RE.fullmatch(symbol):
+        raise HTTPException(status_code=400, detail="Invalid symbol")
+
     kronos = await run_kronos_analysis(symbol)
     alert = _directional_features(symbol)
     market_gate = _opening_market_gate()
-    gamma_context, market_context = await asyncio.gather(
+    gamma_context, flow_context, market_context = await asyncio.gather(
         fetch_gamma_context(symbol, float(alert.get("price") or 0.0) or None),
+        fetch_flow_context(symbol),
         asyncio.to_thread(_market_regime),
     )
-    flow_context = _flow_context()
 
     if market_gate["active"]:
         fusion_score = build_fusion_score(
@@ -410,10 +414,7 @@ async def fusion(
             "flow": flow_context,
             "market_regime": market_context,
             "fusion_score": fusion_score,
-            "decision": {
-                "decision": "WATCH",
-                "reason": market_gate["reason"],
-            },
+            "decision": {"decision": "WATCH", "reason": market_gate["reason"]},
             "trade_plan": None,
             "options": [],
             "option_scan_ran": False,
