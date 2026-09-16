@@ -69,3 +69,20 @@ def test_signal_stays_pending_until_twelve_future_bars() -> None:
     status, outcome = evaluate_signal_row(signal, _bars(created, [100.1] * 8))
     assert status == "PENDING"
     assert outcome["bars_available"] == 8
+
+
+def test_naive_market_clock_bars_are_treated_as_eastern(monkeypatch) -> None:
+    monkeypatch.setenv("MNT_BAR_TIMEZONE", "America/New_York")
+    created_utc = datetime(2026, 9, 16, 14, 30, tzinfo=timezone.utc)  # 10:30 ET
+    naive_et_start = datetime(2026, 9, 16, 10, 30)
+    closes = [100.0 + i * 0.02 for i in range(24)]
+    signal = {
+        "id": 4,
+        "created_at": created_utc.isoformat(),
+        "direction": "LONG",
+        "payload": {"technical": {"price": 100.0}},
+    }
+    status, outcome = evaluate_signal_row(signal, _bars(naive_et_start, closes))
+    assert status == "EVALUATED_2H"
+    assert outcome["bars_evaluated"] == 24
+    assert outcome["directional_return_2h_pct"] > 0
