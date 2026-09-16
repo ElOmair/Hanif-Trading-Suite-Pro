@@ -17,7 +17,8 @@ from fastapi import APIRouter, HTTPException, Query
 from flow_provider import fetch_flow_context
 from gamma_provider import fetch_gamma_context
 from mnt_engine import build_fusion_score
-from signal_store import list_signals, record_signal
+from signal_calibrator import calibrate_symbol_signals
+from signal_store import calibration_summary, list_signals, record_signal
 
 router = APIRouter(prefix="/api/kronos", tags=["kronos"])
 
@@ -331,7 +332,16 @@ def _import_kronos_module(name: str):
     return importlib.import_module(name)
 
 
+def _refresh_calibration(symbol: str) -> dict[str, Any]:
+    try:
+        return calibrate_symbol_signals(symbol, DATA_DIR)
+    except Exception as exc:
+        return {"symbol": symbol, "status": "error", "error": type(exc).__name__}
+
+
 def _finalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    symbol = str(payload.get("symbol") or "").upper()
+    payload["calibration_refresh"] = _refresh_calibration(symbol) if symbol else {"status": "skipped"}
     try:
         payload["signal_id"] = record_signal(payload)
     except Exception as exc:
@@ -377,6 +387,18 @@ async def signals(symbol: str | None = Query(None), limit: int = Query(50, ge=1,
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Signal history unavailable: {type(exc).__name__}") from exc
     return {"symbol": symbol, "count": len(items), "signals": items}
+
+
+@router.get("/signals/calibration")
+async def signal_calibration(symbol: str | None = Query(None), limit: int = Query(500, ge=1, le=500)) -> dict[str, Any]:
+    if symbol is not None:
+        symbol = symbol.strip().upper()
+        if not SYMBOL_RE.fullmatch(symbol):
+            raise HTTPException(status_code=400, detail="Invalid symbol")
+    try:
+        return calibration_summary(symbol=symbol, limit=limit)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Calibration summary unavailable: {type(exc).__name__}") from exc
 
 
 @router.post("/fusion/{symbol}")
