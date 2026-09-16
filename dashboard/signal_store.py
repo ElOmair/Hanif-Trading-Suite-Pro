@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from risk_governor import build_execution_gate
+
 DEFAULT_DB = Path(__file__).resolve().parent / "data" / "mnt_signals.sqlite3"
 
 
@@ -68,6 +70,28 @@ def _decision_label(value: Any) -> str | None:
     return str(value).upper()
 
 
+def _attach_execution_gate(payload: dict[str, Any]) -> None:
+    if isinstance(payload.get("execution_gate"), dict):
+        return
+    try:
+        payload["execution_gate"] = build_execution_gate(
+            technical=payload.get("technical") or {},
+            fusion_score=payload.get("fusion_score") or {},
+            decision=payload.get("decision"),
+            trade_plan=payload.get("trade_plan") or {},
+            market_gate=payload.get("market_gate") or {},
+        )
+    except Exception as exc:
+        payload["execution_gate"] = {
+            "state": "BLOCKED",
+            "entry_review_allowed": False,
+            "order_authorized": False,
+            "research_only": True,
+            "primary_reason": "The MnT risk governor could not evaluate this setup.",
+            "error": type(exc).__name__,
+        }
+
+
 def _decode_row(row: sqlite3.Row) -> dict[str, Any]:
     item = dict(row)
     try:
@@ -87,6 +111,10 @@ def _decode_row(row: sqlite3.Row) -> dict[str, Any]:
 
 
 def record_signal(payload: dict[str, Any]) -> int | None:
+    # Fusion returns the same mutable payload after this call, so attaching the
+    # gate here gives every response the server-side verdict even if persistence
+    # is disabled. The database is only the persistence layer, not the gate.
+    _attach_execution_gate(payload)
     if not _enabled():
         return None
     fusion = payload.get("fusion_score") or {}
