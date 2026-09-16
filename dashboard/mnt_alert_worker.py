@@ -12,6 +12,7 @@ from datetime import datetime
 import httpx
 
 from alert_policy import build_discord_message, classify_alert
+from shadow_trade_store import record_ready_shadow_trade
 
 ET = ZoneInfo("America/New_York")
 DEFAULT_SYMBOLS = "SPY,QQQ,NVDA,TSLA,AAPL,AMD,META,AMZN,MSFT,GOOGL,PLTR,COIN"
@@ -84,12 +85,7 @@ def shortlist_from_radar(
     *,
     limit: int = 4,
 ) -> list[str]:
-    """Choose a small long/short-balanced set for expensive Fusion analysis.
-
-    `/api/radar` is intentionally cheap and technical-only. It is not allowed to
-    create an alert itself; it only decides which symbols deserve the slower full
-    Kronos/Gamma/flow/options Fusion pass on this scan.
-    """
+    """Choose a small long/short-balanced set for expensive Fusion analysis."""
     configured = {symbol.upper() for symbol in configured_symbols}
     limit = max(1, int(limit))
     if not radar or not configured:
@@ -116,7 +112,6 @@ def shortlist_from_radar(
     per_side = max(1, limit // 2)
     selected = longs[:per_side] + shorts[:per_side]
 
-    # Fill unused slots with the strongest remaining radar names regardless of side.
     selected_symbols = {item["symbol"] for item in selected}
     leftovers = [item for item in longs[per_side:] + shorts[per_side:] if item["symbol"] not in selected_symbols]
     leftovers.sort(key=lambda item: item["rank_score"], reverse=True)
@@ -240,8 +235,6 @@ async def scan_once(client: httpx.AsyncClient, state: AlertState) -> list[dict[s
             "shortlist": scan_symbols,
         }
     except Exception as exc:
-        # Do not turn a radar outage into a total alert outage. Fall back to a
-        # bounded subset so the expensive Fusion path still cannot explode in cost.
         scan_symbols = configured_symbols[:fusion_shortlist]
         radar_status = {"used": False, "error": type(exc).__name__, "shortlist": scan_symbols}
 
@@ -260,6 +253,7 @@ async def scan_once(client: httpx.AsyncClient, state: AlertState) -> list[dict[s
                 "classification": classification,
                 "payload": payload,
                 "sent": False,
+                "shadow_trade_id": None,
                 "suppressed_by_rank": False,
             }
             results.append(item)
@@ -286,6 +280,16 @@ async def scan_once(client: httpx.AsyncClient, state: AlertState) -> list[dict[s
         if not allowed:
             item["suppressed_by_rank"] = True
             continue
+
+        # Record READY candidates that survived ranking even if Discord is down.
+        # This creates an unbiased shadow journal of what the alert policy would
+        # have surfaced, independent of webhook reliability.
+        if alert_state == "READY":
+            try:
+                item["shadow_trade_id"] = record_ready_shadow_trade(item["payload"], discord_sent=False)
+            except Exception as exc:
+                item["shadow_record_error"] = type(exc).__name__
+
         if not webhook:
             continue
 
@@ -295,6 +299,10 @@ async def scan_once(client: httpx.AsyncClient, state: AlertState) -> list[dict[s
             item["sent"] = True
             if alert_state == "READY":
                 ready_sent += 1
+                try:
+                    item["shadow_trade_id"] = record_ready_shadow_trade(item["payload"], discord_sent=True)
+                except Exception as exc:
+                    item["shadow_delivery_update_error"] = type(exc).__name__
             elif alert_state == "PRE_TRIGGER":
                 pretrigger_sent += 1
         except Exception as exc:
