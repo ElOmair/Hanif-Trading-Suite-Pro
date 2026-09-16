@@ -76,15 +76,7 @@ source ~/kronos-venv/bin/activate
 python mnt_preflight.py
 ```
 
-The command exits non-zero if a required check fails. It verifies:
-
-- Alpaca credentials are present without printing their values.
-- the dashboard health endpoint responds.
-- the dashboard can reach the Kronos backend.
-- Market Radar responds.
-- signal-history API responds.
-- signal, shadow-trade, and alert-state paths are writable.
-- optional Discord and Unusual Whales integrations are identified as warnings when missing.
+The command exits non-zero if a required check fails. It verifies Alpaca configuration, dashboard/Kronos connectivity, Market Radar, signal-history API access, and writable local data paths. Missing Discord or Unusual Whales configuration is reported as a warning rather than silently ignored.
 
 `READY_FOR_SHADOW_SESSION` means infrastructure/configuration checks passed. It does **not** mean the trading model is profitable or that orders are authorized.
 
@@ -110,12 +102,7 @@ python calibration_report.py --symbol SPY
 python calibration_report.py
 ```
 
-The report now includes:
-
-- score-bucket outcome calibration.
-- a shadow-mode recommended minimum score.
-- per-layer effectiveness for technicals, Kronos, Gamma, flow, market, contract quality, and momentum.
-- READY-alert shadow-trade results linked to the exact persisted Fusion signals.
+The report includes score-bucket outcome calibration, shadow-mode threshold recommendations, per-layer effectiveness, and READY-alert shadow-trade results linked to the exact persisted Fusion signals.
 
 `MNT_CALIBRATION_MIN_RESOLVED` controls how many resolved WIN/LOSS observations are required before MnT will even recommend a threshold change. `MNT_CALIBRATION_TARGET_WIN_RATE` sets the descriptive target-first win-rate objective. The policy is advisory only and never relaxes or edits the live risk governor automatically. Layer-effectiveness output is correlation, not proof of causation, and does not auto-edit Fusion weights.
 
@@ -132,8 +119,6 @@ sudo systemctl enable --now hanif-dashboard
 sudo systemctl status hanif-dashboard --no-pager
 ```
 
-The provided service should run as the Kronos user and keep all market-data credentials server-side. If you keep the environment file somewhere other than the service's configured path, update the unit before enabling it.
-
 Useful operations:
 
 ```bash
@@ -144,7 +129,7 @@ journalctl -u hanif-dashboard -f
 
 ## 6. Unattended Discord alerts
 
-`mnt_alert_worker.py` uses a two-stage scan so expensive Kronos Fusion analysis stays timely:
+The worker uses a two-stage scan so expensive Kronos Fusion analysis stays timely:
 
 1. `/api/radar` cheaply ranks the configured market universe.
 2. only the strongest long/short shortlist receives full Kronos + Gamma + flow + market + option analysis.
@@ -152,9 +137,11 @@ journalctl -u hanif-dashboard -f
 
 The worker supports three lifecycle messages:
 
-- **PRE-TRIGGER** — score and coverage are strong enough to pay attention, but confirmation is incomplete. This is intentionally early so Discord does not first alert after the entry has already run.
+- **PRE-TRIGGER** — score and coverage are strong enough to pay attention, but confirmation is incomplete.
 - **READY** — the server-side `execution_gate` allows entry review. A READY idea that survives ranking is also written to the shadow journal even if Discord is unavailable.
-- **STAND DOWN** — an earlier PRE-TRIGGER weakened, was rejected, or became a no-chase. This closes the loop so an old early warning does not remain mentally active.
+- **STAND DOWN** — an earlier PRE-TRIGGER weakened, was rejected, or became a no-chase.
+
+Recent PRE-TRIGGER names remain sticky in the Fusion shortlist until they resolve, even if they fall off the fast radar. Old alert state expires so a previous-day setup cannot suppress a fresh signal.
 
 Configure the worker in `.env`:
 
@@ -172,16 +159,15 @@ MNT_ALERT_STATE_MAX_AGE_SECONDS=14400
 MNT_MAX_PRETRIGGER_ALERTS_PER_SCAN=3
 MNT_MAX_READY_ALERTS_PER_SCAN=5
 MNT_MAX_CONTRACT_COST=300
+MNT_WORKER_STALE_SECONDS=180
 ```
 
-Recent PRE-TRIGGER names remain “sticky” in the Fusion shortlist until they resolve, even if they fall off the fast radar. Old alert state expires so a previous-day setup cannot suppress a fresh signal.
-
-Manual smoke test:
+For a manual foreground run with the same heartbeat behavior used by systemd:
 
 ```bash
 cd ~/Hanif-Trading-Suite-Pro/dashboard
 source ~/kronos-venv/bin/activate
-python mnt_alert_worker.py
+python mnt_alert_supervisor.py
 ```
 
 Install it as a service after the dashboard itself is healthy:
@@ -194,9 +180,34 @@ sudo systemctl status mnt-alert-worker --no-pager
 journalctl -u mnt-alert-worker -f
 ```
 
+The systemd unit launches `mnt_alert_supervisor.py`, which wraps the established scanner and atomically writes `mnt_worker_status.json` after every scan and during off-hours.
+
 The worker does not place a brokerage order. READY means “review entry conditions now,” not “order sent.”
 
-## 7. Shadow READY journal
+## 7. One-command operational status
+
+Once the worker is running, use:
+
+```bash
+cd ~/Hanif-Trading-Suite-Pro/dashboard
+source ~/kronos-venv/bin/activate
+python mnt_status.py
+```
+
+The status report shows:
+
+- `overall`: `OK`, `DEGRADED`, or `ATTENTION`.
+- worker/session state and heartbeat age.
+- whether the heartbeat is stale.
+- last radar shortlist and sticky PRE-TRIGGER names.
+- Fusion attempts/successes/errors.
+- PRE-TRIGGER/READY candidates, Discord sends, STAND DOWN sends, and rank suppression.
+- READY shadow records written on the last scan.
+- aggregate READY-alert shadow results.
+
+By default a heartbeat older than 180 seconds is treated as stale. Override with `MNT_WORKER_STALE_SECONDS` if needed.
+
+## 8. Shadow READY journal
 
 The separate `mnt_shadow_trades.sqlite3` journal records READY ideas that survive the same ranking/cap policy used by Discord. It stores the underlying price, planned entry/stop/target, first option candidate, score, coverage, and the originating `signal_id`.
 
@@ -204,7 +215,7 @@ Because it links back to the normal signal outcome store, the calibration report
 
 This is still shadow testing. No live or paper brokerage order is sent by the journal.
 
-## 8. Cloudflare
+## 9. Cloudflare
 
 Add a published application route on the existing named tunnel:
 
@@ -215,6 +226,6 @@ Use Cloudflare Access on the dashboard hostname before treating the site as priv
 
 ## Current scope
 
-MnT now includes candlesticks/quotes, Market Radar, Kronos Fusion analysis, coverage-aware scoring, opening/no-chase gates, option candidate review, optional Gamma and options-flow context, beginner explanations, persistent signal history, automatic 1h/2h signal calibration, layer attribution, shadow threshold recommendations, two-stage unattended scanning, ranked PRE-TRIGGER/READY Discord alerts, STAND DOWN lifecycle messages, stale-state expiration, a READY shadow journal, and a deployment preflight checker.
+MnT now includes candlesticks/quotes, Market Radar, Kronos Fusion analysis, coverage-aware scoring, opening/no-chase gates, option candidate review, optional Gamma and options-flow context, beginner explanations, persistent signal history, automatic 1h/2h signal calibration, layer attribution, shadow threshold recommendations, two-stage unattended scanning, ranked PRE-TRIGGER/READY Discord alerts, STAND DOWN lifecycle messages, stale-state expiration, a READY shadow journal, deployment preflight, and worker heartbeat/status reporting.
 
 The calibration databases should be allowed to accumulate enough observations before changing score thresholds or model weights. Avoid tuning to a small sample of recent trades.
