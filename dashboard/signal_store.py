@@ -16,6 +16,14 @@ def _enabled() -> bool:
     return os.getenv("MNT_SIGNAL_DB_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, value)
+
+
 def _path() -> Path:
     return Path(os.getenv("MNT_SIGNAL_DB", str(DEFAULT_DB))).expanduser()
 
@@ -70,6 +78,14 @@ def _decision_label(value: Any) -> str | None:
     return str(value).upper()
 
 
+def _number(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed == parsed else None
+
+
 def _attach_execution_gate(payload: dict[str, Any]) -> None:
     if isinstance(payload.get("execution_gate"), dict):
         return
@@ -110,6 +126,55 @@ def _decode_row(row: sqlite3.Row) -> dict[str, Any]:
     return item
 
 
+def _recent_duplicate(
+    connection: sqlite3.Connection,
+    *,
+    symbol: str,
+    direction: str | None,
+    decision: str | None,
+    score: float | None,
+    now: datetime,
+) -> sqlite3.Row | None:
+    window_minutes = _env_float("MNT_SIGNAL_DEDUPE_MINUTES", 5.0, 0.0)
+    score_delta = _env_float("MNT_SIGNAL_DEDUPE_SCORE_DELTA", 3.0, 0.0)
+    if window_minutes <= 0 or not symbol:
+        return None
+
+    row = connection.execute(
+        """
+        SELECT id, created_at, score, direction, decision
+        FROM mnt_signals
+        WHERE symbol = ?
+          AND COALESCE(direction, '') = COALESCE(?, '')
+          AND COALESCE(decision, '') = COALESCE(?, '')
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (symbol, direction, decision),
+    ).fetchone()
+    if row is None:
+        return None
+
+    try:
+        prior_time = datetime.fromisoformat(str(row["created_at"]).replace("Z", "+00:00"))
+        if prior_time.tzinfo is None:
+            prior_time = prior_time.replace(tzinfo=timezone.utc)
+        prior_time = prior_time.astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+    age_minutes = (now - prior_time).total_seconds() / 60.0
+    if age_minutes < 0 or age_minutes > window_minutes:
+        return None
+
+    prior_score = _number(row["score"])
+    scores_close = (
+        score is None and prior_score is None
+        or score is not None and prior_score is not None and abs(score - prior_score) <= score_delta
+    )
+    return row if scores_close else None
+
+
 def record_signal(payload: dict[str, Any]) -> int | None:
     # Fusion returns the same mutable payload after this call, so attaching the
     # gate here gives every response the server-side verdict even if persistence
@@ -117,10 +182,33 @@ def record_signal(payload: dict[str, Any]) -> int | None:
     _attach_execution_gate(payload)
     if not _enabled():
         return None
+
     fusion = payload.get("fusion_score") or {}
-    created_at = datetime.now(timezone.utc).isoformat()
-    encoded = json.dumps(payload, default=str, separators=(",", ":"))
+    symbol = str(payload.get("symbol") or "").upper()
+    direction = str(fusion.get("direction") or "").upper() or None
+    score = _number(fusion.get("score"))
+    decision = _decision_label(payload.get("decision"))
+    now = datetime.now(timezone.utc)
+    created_at = now.isoformat()
+
     with _connect() as connection:
+        duplicate = _recent_duplicate(
+            connection,
+            symbol=symbol,
+            direction=direction,
+            decision=decision,
+            score=score,
+            now=now,
+        )
+        if duplicate is not None:
+            existing_id = int(duplicate["id"])
+            payload["signal_deduplicated"] = True
+            payload["deduplicated_signal_id"] = existing_id
+            payload["dedupe_reason"] = "Same symbol, direction, decision, and materially similar score within the dedupe window."
+            return existing_id
+
+        payload["signal_deduplicated"] = False
+        encoded = json.dumps(payload, default=str, separators=(",", ":"))
         cursor = connection.execute(
             """
             INSERT INTO mnt_signals(
@@ -130,13 +218,13 @@ def record_signal(payload: dict[str, Any]) -> int | None:
             """,
             (
                 created_at,
-                str(payload.get("symbol") or "").upper(),
-                fusion.get("direction"),
-                fusion.get("score"),
+                symbol,
+                direction,
+                score,
                 fusion.get("coverage_pct"),
                 fusion.get("grade"),
                 fusion.get("beginner_state"),
-                _decision_label(payload.get("decision")),
+                decision,
                 encoded,
                 "PENDING",
             ),
@@ -212,7 +300,13 @@ def update_signal_outcome(signal_id: int, outcome: dict[str, Any], status: str) 
 
 def calibration_summary(symbol: str | None = None, limit: int = 1000) -> dict[str, Any]:
     rows = list_signals(symbol=symbol, limit=limit)
-    evaluated = [row for row in rows if isinstance(row.get("outcome"), dict)]
+    evaluated = [
+        row
+        for row in rows
+        if row.get("outcome_status") in {"EVALUATED_1H", "EVALUATED_2H"}
+        and str(row.get("direction") or "").upper() in {"LONG", "SHORT"}
+        and isinstance(row.get("outcome"), dict)
+    ]
     buckets: dict[str, dict[str, Any]] = {}
     for row in evaluated:
         score = row.get("score")
@@ -225,7 +319,18 @@ def calibration_summary(symbol: str | None = None, limit: int = 1000) -> dict[st
         lower = int(score_value // 10) * 10
         upper = min(100, lower + 9)
         key = f"{lower}-{upper}"
-        bucket = buckets.setdefault(key, {"count": 0, "wins": 0, "losses": 0, "ambiguous": 0, "positive_2h": 0, "negative_2h": 0})
+        bucket = buckets.setdefault(
+            key,
+            {
+                "count": 0,
+                "wins": 0,
+                "losses": 0,
+                "ambiguous": 0,
+                "unresolved": 0,
+                "positive_2h": 0,
+                "negative_2h": 0,
+            },
+        )
         bucket["count"] += 1
         if label == "WIN":
             bucket["wins"] += 1
@@ -233,11 +338,13 @@ def calibration_summary(symbol: str | None = None, limit: int = 1000) -> dict[st
             bucket["losses"] += 1
         elif label == "AMBIGUOUS":
             bucket["ambiguous"] += 1
-        directional_2h = outcome.get("directional_return_2h_pct")
+        else:
+            bucket["unresolved"] += 1
+        directional_2h = _number(outcome.get("directional_return_2h_pct"))
         if directional_2h is not None:
-            if float(directional_2h) > 0:
+            if directional_2h > 0:
                 bucket["positive_2h"] += 1
-            elif float(directional_2h) < 0:
+            elif directional_2h < 0:
                 bucket["negative_2h"] += 1
 
     for bucket in buckets.values():
@@ -251,5 +358,5 @@ def calibration_summary(symbol: str | None = None, limit: int = 1000) -> dict[st
         "evaluated_count": len(evaluated),
         "total_count": len(rows),
         "score_buckets": buckets,
-        "note": "Calibration is descriptive signal history, not a guarantee of future performance.",
+        "note": "Calibration includes only gradable LONG/SHORT signals. It is descriptive signal history, not a guarantee of future performance.",
     }
