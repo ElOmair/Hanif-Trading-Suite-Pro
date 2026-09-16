@@ -2,7 +2,13 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from mnt_alert_worker import AlertState, market_scan_active, rank_alert_candidates, shortlist_from_radar
+from mnt_alert_worker import (
+    AlertState,
+    market_scan_active,
+    rank_alert_candidates,
+    select_alert_delivery,
+    shortlist_from_radar,
+)
 
 
 def test_market_scan_active_during_weekday_session(monkeypatch):
@@ -55,6 +61,19 @@ def test_same_state_ranks_score_then_coverage():
     ]
     ranked = rank_alert_candidates(rows)
     assert [row["symbol"] for row in ranked] == ["C", "B", "A"]
+
+
+def test_delivery_caps_apply_before_webhook_or_shadow_recording():
+    rows = [
+        {"symbol": "R1", "classification": {"state": "READY", "score": 95, "coverage_pct": 90}, "suppressed_by_rank": False},
+        {"symbol": "R2", "classification": {"state": "READY", "score": 90, "coverage_pct": 85}, "suppressed_by_rank": False},
+        {"symbol": "P1", "classification": {"state": "PRE_TRIGGER", "score": 92, "coverage_pct": 88}, "suppressed_by_rank": False},
+        {"symbol": "P2", "classification": {"state": "PRE_TRIGGER", "score": 89, "coverage_pct": 82}, "suppressed_by_rank": False},
+    ]
+    selected = select_alert_delivery(rows, max_ready=1, max_pretrigger=1)
+    assert [row["symbol"] for row in selected] == ["R1", "P1"]
+    assert next(row for row in rows if row["symbol"] == "R2")["suppressed_by_rank"] is True
+    assert next(row for row in rows if row["symbol"] == "P2")["suppressed_by_rank"] is True
 
 
 def test_radar_shortlist_balances_long_and_short():
