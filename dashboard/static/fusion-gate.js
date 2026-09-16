@@ -2,6 +2,8 @@
   const analysisCard = document.querySelector('.analysis-card');
   if (!analysisCard || document.getElementById('tradeGate')) return;
 
+  let latestServerGate = null;
+
   const gate = document.createElement('div');
   gate.id = 'tradeGate';
   gate.className = 'trade-gate waiting';
@@ -37,6 +39,64 @@
     return { direction: 'NEUTRAL', option: 'WAIT', kronosBias: 'NEUTRAL' };
   }
 
+  function expiryText(value) {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return ` Re-analyze after ${date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} if you still want the setup.`;
+  }
+
+  function renderServerGate(stateEl, summaryEl, optionStatus, setupNote) {
+    const server = latestServerGate;
+    if (!server || !server.state) return false;
+
+    const state = String(server.state).toUpperCase();
+    const direction = String(server.direction || 'NEUTRAL').toUpperCase();
+    const option = direction === 'LONG' ? 'CALL' : direction === 'SHORT' ? 'PUT' : 'OPTION';
+    const reason = server.primary_reason || 'MnT is waiting for the setup to pass its server-side risk gates.';
+    const expiry = expiryText(server.expires_at);
+    const blockerCodes = Array.isArray(server.blockers) ? server.blockers.map(item => item.code) : [];
+
+    if (state === 'REVIEW_ENTRY' && server.entry_review_allowed === true) {
+      gate.className = 'trade-gate aligned';
+      stateEl.textContent = 'MNT GATES PASSED — REVIEW ENTRY';
+      summaryEl.textContent = `${reason}${expiry} This is still research-only; no brokerage order is authorized.`;
+      if (optionStatus) {
+        optionStatus.className = 'option-gate-status aligned';
+        optionStatus.textContent = `${option} setup passed the current MnT review gates. Confirm price, contract debit, stop, and no-chase level before acting.`;
+      }
+      if (setupNote) setupNote.textContent = `${option} setup passed the server-side review gates. order_authorized remains false.`;
+      return true;
+    }
+
+    if (state === 'BLOCKED') {
+      gate.className = blockerCodes.includes('DECISION_REJECT') ? 'trade-gate rejected' : 'trade-gate blocked';
+      if (blockerCodes.includes('NO_CHASE')) stateEl.textContent = 'BLOCKED — DO NOT CHASE';
+      else if (blockerCodes.includes('LOW_COVERAGE')) stateEl.textContent = 'BLOCKED — NOT ENOUGH DATA';
+      else if (blockerCodes.includes('LOW_SCORE')) stateEl.textContent = 'BLOCKED — QUALITY SCORE TOO LOW';
+      else if (blockerCodes.includes('OPENING_LOCKOUT')) stateEl.textContent = 'BLOCKED — OPENING LOCKOUT';
+      else if (blockerCodes.includes('DECISION_REJECT')) stateEl.textContent = 'REJECTED BY MNT';
+      else stateEl.textContent = 'BLOCKED BY MNT RISK GATE';
+      summaryEl.textContent = `${reason}${expiry}`;
+      if (optionStatus) {
+        optionStatus.className = 'option-gate-status blocked';
+        optionStatus.textContent = `${option} entry review is locked until a new Fusion analysis clears the server-side blockers.`;
+      }
+      if (setupNote) setupNote.textContent = `Server risk gate blocked this setup: ${blockerCodes.join(', ') || 'risk check failed'}.`;
+      return true;
+    }
+
+    gate.className = 'trade-gate waiting';
+    stateEl.textContent = 'WAIT — MNT NEEDS CONFIRMATION';
+    summaryEl.textContent = `${reason}${expiry}`;
+    if (optionStatus) {
+      optionStatus.className = 'option-gate-status waiting';
+      optionStatus.textContent = `${option} entry review stays locked until the server-side Decision/Risk gates confirm it.`;
+    }
+    if (setupNote) setupNote.textContent = 'MnT server gate is waiting. Do not enter early.';
+    return true;
+  }
+
   function render() {
     const side = technicalSide();
     const bias = text('kronosBias');
@@ -49,6 +109,9 @@
 
     gate.className = 'trade-gate waiting';
     if (optionStatus) optionStatus.className = 'option-gate-status waiting';
+
+    // Once a Fusion payload exists, the backend risk governor is authoritative.
+    if (renderServerGate(stateEl, summaryEl, optionStatus, setupNote)) return;
 
     if (!bias || bias === '—' || bias === 'CHECKING' || bias === 'RUNNING…') {
       stateEl.textContent = 'WAITING FOR KRONOS';
@@ -100,6 +163,11 @@
     }
     if (setupNote) setupNote.textContent = `Technical + Kronos direction aligned for ${side.option}. Not final CONFIRM until the decision/risk gates pass.`;
   }
+
+  window.addEventListener('mnt:fusion-result', event => {
+    latestServerGate = event.detail?.execution_gate || null;
+    render();
+  });
 
   const watchIds = ['direction', 'kronosBias', 'kronosAction', 'kronosStability'];
   for (const id of watchIds) {
