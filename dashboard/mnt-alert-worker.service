@@ -1,0 +1,18 @@
+[Unit]
+Description=MnT Unattended Market Alert Worker
+After=network-online.target hanif-dashboard.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=airomair
+WorkingDirectory=/home/airomair/Hanif-Trading-Suite-Pro/dashboard
+EnvironmentFile=-/home/airomair/Hanif-Trading-Suite-Pro/dashboard/.env
+ExecStart=/usr/bin/python3 /home/airomair/Hanif-Trading-Suite-Pro/dashboard/mnt_alert_worker.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
