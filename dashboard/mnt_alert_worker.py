@@ -11,7 +11,7 @@ from datetime import datetime
 
 import httpx
 
-from alert_policy import build_discord_message, classify_alert
+from alert_policy import build_discord_message, build_stand_down_message, classify_alert
 from shadow_trade_store import record_ready_shadow_trade
 
 ET = ZoneInfo("America/New_York")
@@ -61,7 +61,6 @@ def market_scan_active(now: datetime | None = None) -> bool:
 
 
 def rank_alert_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Rank alertable scan results without changing their underlying MnT score."""
     def key(item: dict[str, Any]) -> tuple[int, float, float]:
         classification = item.get("classification") or {}
         state = str(classification.get("state") or "")
@@ -85,7 +84,6 @@ def shortlist_from_radar(
     *,
     limit: int = 4,
 ) -> list[str]:
-    """Choose a small long/short-balanced set for expensive Fusion analysis."""
     configured = {symbol.upper() for symbol in configured_symbols}
     limit = max(1, int(limit))
     if not radar or not configured:
@@ -111,7 +109,6 @@ def shortlist_from_radar(
     shorts = normalized(radar.get("shorts"), "SHORT")
     per_side = max(1, limit // 2)
     selected = longs[:per_side] + shorts[:per_side]
-
     selected_symbols = {item["symbol"] for item in selected}
     leftovers = [item for item in longs[per_side:] + shorts[per_side:] if item["symbol"] not in selected_symbols]
     leftovers.sort(key=lambda item: item["rank_score"], reverse=True)
@@ -148,11 +145,33 @@ class AlertState:
         temp.write_text(json.dumps(self.data, indent=2, sort_keys=True), encoding="utf-8")
         temp.replace(self.path)
 
+    def _fresh_previous(self, symbol: str) -> dict[str, Any]:
+        previous = self.data.get(symbol) or {}
+        if not previous:
+            return {}
+        max_age = _env_float("MNT_ALERT_STATE_MAX_AGE_SECONDS", 14400.0, 60.0)
+        previous_time = float(previous.get("sent_at") or 0.0)
+        if previous_time <= 0 or time.time() - previous_time > max_age:
+            self.data.pop(symbol, None)
+            self.save()
+            return {}
+        return previous
+
+    def active_pretrigger_symbols(self, configured_symbols: list[str], limit: int = 2) -> list[str]:
+        configured = {symbol.upper() for symbol in configured_symbols}
+        active: list[tuple[float, str]] = []
+        for symbol in list(self.data):
+            previous = self._fresh_previous(symbol)
+            if symbol in configured and str(previous.get("state") or "") == "PRE_TRIGGER":
+                active.append((float(previous.get("sent_at") or 0.0), symbol))
+        active.sort(reverse=True)
+        return [symbol for _, symbol in active[: max(0, int(limit))]]
+
     def should_send(self, symbol: str, classification: dict[str, Any], cooldown_seconds: float) -> bool:
         state = str(classification.get("state") or "")
         score = classification.get("score")
         now = time.time()
-        previous = self.data.get(symbol) or {}
+        previous = self._fresh_previous(symbol)
         previous_state = str(previous.get("state") or "")
         previous_score = previous.get("score")
         previous_time = float(previous.get("sent_at") or 0.0)
@@ -170,6 +189,12 @@ class AlertState:
             pass
         return state in {"PRE_TRIGGER", "READY"}
 
+    def needs_stand_down(self, symbol: str, classification: dict[str, Any]) -> bool:
+        previous = self._fresh_previous(symbol)
+        previous_state = str(previous.get("state") or "")
+        current = str(classification.get("state") or "")
+        return previous_state == "PRE_TRIGGER" and current in {"WATCH", "NO_DIRECTION", "REJECTED", "NO_CHASE"}
+
     def mark_sent(self, symbol: str, classification: dict[str, Any]) -> None:
         self.data[symbol] = {
             "state": classification.get("state"),
@@ -179,12 +204,16 @@ class AlertState:
         }
         self.save()
 
+    def clear(self, symbol: str) -> None:
+        if symbol in self.data:
+            self.data.pop(symbol, None)
+            self.save()
+
     def observe(self, symbol: str, classification: dict[str, Any]) -> None:
         if classification.get("state") in {"WATCH", "NO_DIRECTION", "REJECTED", "NO_CHASE"}:
-            previous = self.data.get(symbol)
+            previous = self._fresh_previous(symbol)
             if previous and previous.get("state") != "READY":
-                self.data.pop(symbol, None)
-                self.save()
+                self.clear(symbol)
 
 
 async def fetch_radar(client: httpx.AsyncClient, base_url: str, limit: int = 20) -> dict[str, Any]:
@@ -218,25 +247,38 @@ async def scan_once(client: httpx.AsyncClient, state: AlertState) -> list[dict[s
     max_pretrigger_per_scan = _env_int("MNT_MAX_PRETRIGGER_ALERTS_PER_SCAN", 3, 0)
     max_ready_per_scan = _env_int("MNT_MAX_READY_ALERTS_PER_SCAN", 5, 0)
     fusion_shortlist = _env_int("MNT_FUSION_SHORTLIST", 4, 1)
+    sticky_limit = _env_int("MNT_STICKY_PRETRIGGER_LIMIT", 2, 0)
     max_contract_cost_raw = os.getenv("MNT_MAX_CONTRACT_COST", "300").strip()
     max_contract_cost = float(max_contract_cost_raw) if max_contract_cost_raw else None
     configured_symbols = _symbols()
+    sticky_symbols = state.active_pretrigger_symbols(configured_symbols, limit=sticky_limit)
 
     results: list[dict[str, Any]] = []
     alertable: list[dict[str, Any]] = []
+    stand_downable: list[dict[str, Any]] = []
 
+    radar_slots = max(0, fusion_shortlist - len(sticky_symbols))
     try:
         radar = await fetch_radar(client, base_url, limit=20)
-        scan_symbols = shortlist_from_radar(radar, configured_symbols, limit=fusion_shortlist)
+        radar_symbols = shortlist_from_radar(radar, configured_symbols, limit=max(1, radar_slots)) if radar_slots else []
+        scan_symbols = sticky_symbols + [symbol for symbol in radar_symbols if symbol not in sticky_symbols]
+        scan_symbols = scan_symbols[:fusion_shortlist]
         radar_status = {
             "used": True,
             "cached": bool(radar.get("cached")),
             "stale": bool(radar.get("stale")),
+            "sticky_pretriggers": sticky_symbols,
             "shortlist": scan_symbols,
         }
     except Exception as exc:
-        scan_symbols = configured_symbols[:fusion_shortlist]
-        radar_status = {"used": False, "error": type(exc).__name__, "shortlist": scan_symbols}
+        fallback = [symbol for symbol in configured_symbols if symbol not in sticky_symbols]
+        scan_symbols = (sticky_symbols + fallback)[:fusion_shortlist]
+        radar_status = {
+            "used": False,
+            "error": type(exc).__name__,
+            "sticky_pretriggers": sticky_symbols,
+            "shortlist": scan_symbols,
+        }
 
     results.append({"stage": "radar", **radar_status})
 
@@ -253,16 +295,31 @@ async def scan_once(client: httpx.AsyncClient, state: AlertState) -> list[dict[s
                 "classification": classification,
                 "payload": payload,
                 "sent": False,
+                "stand_down_sent": False,
                 "shadow_trade_id": None,
                 "suppressed_by_rank": False,
             }
             results.append(item)
-            if classification.get("alert") and state.should_send(symbol, classification, cooldown):
+            if state.needs_stand_down(symbol, classification):
+                stand_downable.append(item)
+            elif classification.get("alert") and state.should_send(symbol, classification, cooldown):
                 alertable.append(item)
             else:
                 state.observe(symbol, classification)
         except Exception as exc:
             results.append({"symbol": symbol, "error": type(exc).__name__, "sent": False})
+
+    # Close the loop on previously sent PRE_TRIGGER ideas before sending fresh ideas.
+    for item in stand_downable:
+        if webhook:
+            try:
+                await send_discord(client, webhook, build_stand_down_message(item["payload"], item["classification"]))
+                item["stand_down_sent"] = True
+                state.clear(item["symbol"])
+            except Exception as exc:
+                item["stand_down_error"] = type(exc).__name__
+        else:
+            state.clear(item["symbol"])
 
     ranked = rank_alert_candidates(alertable)
     ready_sent = 0
@@ -281,9 +338,6 @@ async def scan_once(client: httpx.AsyncClient, state: AlertState) -> list[dict[s
             item["suppressed_by_rank"] = True
             continue
 
-        # Record READY candidates that survived ranking even if Discord is down.
-        # This creates an unbiased shadow journal of what the alert policy would
-        # have surfaced, independent of webhook reliability.
         if alert_state == "READY":
             try:
                 item["shadow_trade_id"] = record_ready_shadow_trade(item["payload"], discord_sent=False)
