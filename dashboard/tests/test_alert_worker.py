@@ -1,7 +1,7 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from mnt_alert_worker import AlertState, market_scan_active, rank_alert_candidates
+from mnt_alert_worker import AlertState, market_scan_active, rank_alert_candidates, shortlist_from_radar
 
 
 def test_market_scan_active_during_weekday_session(monkeypatch):
@@ -54,3 +54,38 @@ def test_same_state_ranks_score_then_coverage():
     ]
     ranked = rank_alert_candidates(rows)
     assert [row["symbol"] for row in ranked] == ["C", "B", "A"]
+
+
+def test_radar_shortlist_balances_long_and_short():
+    radar = {
+        "longs": [
+            {"symbol": "NVDA", "rank_score": 92},
+            {"symbol": "AAPL", "rank_score": 85},
+            {"symbol": "META", "rank_score": 80},
+        ],
+        "shorts": [
+            {"symbol": "TSLA", "rank_score": 90},
+            {"symbol": "AMD", "rank_score": 82},
+            {"symbol": "COIN", "rank_score": 78},
+        ],
+    }
+    selected = shortlist_from_radar(radar, ["NVDA", "AAPL", "META", "TSLA", "AMD", "COIN"], limit=4)
+    assert selected == ["NVDA", "AAPL", "TSLA", "AMD"]
+
+
+def test_radar_shortlist_filters_to_configured_symbols_and_fills_slots():
+    radar = {
+        "longs": [
+            {"symbol": "NOTWATCHED", "rank_score": 99},
+            {"symbol": "NVDA", "rank_score": 88},
+            {"symbol": "AAPL", "rank_score": 84},
+        ],
+        "shorts": [{"symbol": "TSLA", "rank_score": 91}],
+    }
+    selected = shortlist_from_radar(radar, ["NVDA", "AAPL", "TSLA"], limit=3)
+    assert selected == ["NVDA", "TSLA", "AAPL"]
+
+
+def test_radar_failure_fallback_is_bounded():
+    configured = ["SPY", "QQQ", "NVDA", "TSLA", "AAPL"]
+    assert shortlist_from_radar(None, configured, limit=3) == ["SPY", "QQQ", "NVDA"]
