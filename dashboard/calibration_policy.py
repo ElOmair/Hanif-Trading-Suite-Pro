@@ -56,11 +56,16 @@ def build_calibration_policy(
     rows.sort(key=lambda item: item["lower_score"])
     enough_data = total_resolved >= max(1, int(min_resolved_samples))
 
-    # For each possible threshold, aggregate all resolved samples at/above it.
+    # Only evaluate candidate bucket thresholds at or above the current live gate.
+    # A lower bucket (for example 60-69 when the live gate is 62) contains samples
+    # that the live rule would never allow, so using it would contaminate the
+    # recommendation with below-gate observations.
     candidates: list[dict[str, Any]] = []
     for row in rows:
-        threshold = row["lower_score"]
-        eligible = [item for item in rows if item["lower_score"] >= threshold]
+        threshold = float(row["lower_score"])
+        if threshold < float(current_min_score):
+            continue
+        eligible = [item for item in rows if float(item["lower_score"]) >= threshold]
         wins = sum(int(item["wins"]) for item in eligible)
         losses = sum(int(item["losses"]) for item in eligible)
         resolved = wins + losses
@@ -69,7 +74,7 @@ def build_calibration_policy(
         win_rate = 100.0 * wins / resolved
         candidates.append(
             {
-                "threshold": float(threshold),
+                "threshold": threshold,
                 "resolved": resolved,
                 "wins": wins,
                 "losses": losses,
