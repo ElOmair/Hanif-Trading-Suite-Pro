@@ -30,6 +30,31 @@ def test_signal_store_round_trip(tmp_path: Path, monkeypatch) -> None:
     assert rows[0]["score"] == 82.5
     assert rows[0]["outcome_status"] == "PENDING"
     assert rows[0]["payload"]["fusion_score"]["coverage_pct"] == 65.0
+    assert rows[0]["payload"]["execution_gate"]["order_authorized"] is False
+
+
+def test_record_signal_attaches_review_gate_before_persistence(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("MNT_SIGNAL_DB", str(tmp_path / "gate.sqlite3"))
+    monkeypatch.setenv("MNT_SIGNAL_DB_ENABLED", "true")
+    payload = {
+        "symbol": "SPY",
+        "technical": {
+            "signal": "LONG",
+            "price": 100.0,
+            "atr": 2.0,
+            "entry_low": 99.5,
+            "entry_high": 100.5,
+        },
+        "decision": {"decision": "CONFIRM"},
+        "trade_plan": {"entry_low": 99.5, "entry_high": 100.5},
+        "market_gate": {"active": False},
+        "fusion_score": {"direction": "LONG", "score": 84.0, "coverage_pct": 80.0},
+    }
+    signal_id = record_signal(payload)
+    assert signal_id is not None
+    assert payload["execution_gate"]["state"] == "REVIEW_ENTRY"
+    assert payload["execution_gate"]["entry_review_allowed"] is True
+    assert payload["execution_gate"]["order_authorized"] is False
 
 
 def test_signal_outcome_and_calibration_summary(tmp_path: Path, monkeypatch) -> None:
@@ -73,8 +98,11 @@ def test_signal_outcome_and_calibration_summary(tmp_path: Path, monkeypatch) -> 
     assert summary["score_buckets"]["80-89"]["positive_2h_rate_pct"] == 100.0
 
 
-def test_signal_store_can_be_disabled(tmp_path: Path, monkeypatch) -> None:
+def test_signal_store_can_be_disabled_but_gate_still_attaches(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("MNT_SIGNAL_DB", str(tmp_path / "disabled.sqlite3"))
     monkeypatch.setenv("MNT_SIGNAL_DB_ENABLED", "false")
-    assert record_signal({"symbol": "SPY", "fusion_score": {}}) is None
+    payload = {"symbol": "SPY", "fusion_score": {}}
+    assert record_signal(payload) is None
+    assert payload["execution_gate"]["entry_review_allowed"] is False
+    assert payload["execution_gate"]["order_authorized"] is False
     assert list_signals("SPY", 10) == []
