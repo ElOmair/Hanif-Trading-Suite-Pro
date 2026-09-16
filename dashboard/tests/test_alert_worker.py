@@ -1,7 +1,7 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from mnt_alert_worker import AlertState, market_scan_active
+from mnt_alert_worker import AlertState, market_scan_active, rank_alert_candidates
 
 
 def test_market_scan_active_during_weekday_session(monkeypatch):
@@ -35,3 +35,22 @@ def test_watch_resets_pretrigger_so_new_setup_can_alert(tmp_path):
     state.mark_sent("SPY", pre)
     state.observe("SPY", {"state": "WATCH"})
     assert state.should_send("SPY", pre, 900) is True
+
+
+def test_ready_alerts_rank_above_pretrigger():
+    rows = [
+        {"symbol": "NVDA", "classification": {"state": "PRE_TRIGGER", "score": 95, "coverage_pct": 90}},
+        {"symbol": "SPY", "classification": {"state": "READY", "score": 78, "coverage_pct": 70}},
+    ]
+    ranked = rank_alert_candidates(rows)
+    assert ranked[0]["symbol"] == "SPY"
+
+
+def test_same_state_ranks_score_then_coverage():
+    rows = [
+        {"symbol": "A", "classification": {"state": "PRE_TRIGGER", "score": 80, "coverage_pct": 65}},
+        {"symbol": "B", "classification": {"state": "PRE_TRIGGER", "score": 84, "coverage_pct": 60}},
+        {"symbol": "C", "classification": {"state": "PRE_TRIGGER", "score": 84, "coverage_pct": 85}},
+    ]
+    ranked = rank_alert_candidates(rows)
+    assert [row["symbol"] for row in ranked] == ["C", "B", "A"]
