@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -17,14 +19,52 @@ def _number(value: Any) -> float | None:
 
 
 def _timestamp_series(frame: pd.DataFrame) -> pd.Series:
+    """Return bar timestamps normalized to UTC.
+
+    Kronos/Alpaca CSV files may contain either epoch timestamps, ISO timestamps
+    with an explicit offset, or naive market-clock timestamps. Naive values are
+    interpreted in MNT_BAR_TIMEZONE (America/New_York by default) before being
+    converted to UTC so outcome grading lines up with the UTC signal timestamp.
+    """
     for name in ("timestamps", "timestamp", "datetime", "time", "date"):
-        if name in frame.columns:
-            raw = frame[name]
-            if pd.api.types.is_numeric_dtype(raw):
-                sample = pd.to_numeric(raw, errors="coerce").dropna()
-                unit = "ms" if not sample.empty and float(sample.abs().median()) > 10_000_000_000 else "s"
-                return pd.to_datetime(raw, errors="coerce", utc=True, unit=unit)
-            return pd.to_datetime(raw, errors="coerce", utc=True)
+        if name not in frame.columns:
+            continue
+
+        raw = frame[name]
+        if pd.api.types.is_numeric_dtype(raw):
+            sample = pd.to_numeric(raw, errors="coerce").dropna()
+            unit = "ms" if not sample.empty and float(sample.abs().median()) > 10_000_000_000 else "s"
+            return pd.to_datetime(raw, errors="coerce", utc=True, unit=unit)
+
+        text = raw.astype("string").str.strip()
+        # Explicit offsets/Z can be safely normalized directly to UTC. This also
+        # handles rows spanning EST/EDT without creating mixed-timezone objects.
+        explicit_zone = text.str.contains(r"(?:Z|[+-]\d{2}:?\d{2})$", regex=True, na=False)
+        if bool(explicit_zone.any()):
+            return pd.to_datetime(raw, errors="coerce", utc=True, format="mixed")
+
+        parsed = pd.to_datetime(raw, errors="coerce", format="mixed")
+        timezone_name = os.getenv("MNT_BAR_TIMEZONE", "America/New_York").strip() or "America/New_York"
+        try:
+            localized = parsed.dt.tz_localize(timezone_name, ambiguous="NaT", nonexistent="shift_forward")
+            return localized.dt.tz_convert("UTC")
+        except (AttributeError, TypeError, ValueError):
+            # Last-resort normalization for uncommon timestamp shapes. Returning
+            # NaT is safer than silently grading a signal against the wrong bars.
+            values: list[pd.Timestamp | pd.NaTType] = []
+            for value in parsed:
+                if pd.isna(value):
+                    values.append(pd.NaT)
+                    continue
+                stamp = pd.Timestamp(value)
+                try:
+                    if stamp.tzinfo is None:
+                        stamp = stamp.tz_localize(timezone_name, ambiguous="NaT", nonexistent="shift_forward")
+                    values.append(stamp.tz_convert("UTC"))
+                except (TypeError, ValueError):
+                    values.append(pd.NaT)
+            return pd.Series(values, index=frame.index, dtype="datetime64[ns, UTC]")
+
     return pd.Series(pd.NaT, index=frame.index, dtype="datetime64[ns, UTC]")
 
 
