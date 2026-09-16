@@ -25,6 +25,14 @@ def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
     return max(minimum, value)
 
 
+def _env_int(name: str, default: int, minimum: int = 0) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, value)
+
+
 def _symbols() -> list[str]:
     raw = os.getenv("MNT_ALERT_SYMBOLS", DEFAULT_SYMBOLS)
     values: list[str] = []
@@ -49,6 +57,30 @@ def market_scan_active(now: datetime | None = None) -> bool:
     start = int(_env_float("MNT_ALERT_START_MINUTE_ET", 9 * 60 + 25, 0))
     end = int(_env_float("MNT_ALERT_END_MINUTE_ET", 16 * 60 + 5, 0))
     return start <= minute <= end
+
+
+def rank_alert_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rank alertable scan results without changing their underlying MnT score.
+
+    READY always outranks PRE_TRIGGER. Within the same state, higher Fusion score,
+    then better data coverage, wins. This ranking is delivery priority only; it is
+    not another trading model and does not alter the server-side execution gate.
+    """
+    def key(item: dict[str, Any]) -> tuple[int, float, float]:
+        classification = item.get("classification") or {}
+        state = str(classification.get("state") or "")
+        state_rank = 2 if state == "READY" else 1 if state == "PRE_TRIGGER" else 0
+        try:
+            score = float(classification.get("score") or 0.0)
+        except (TypeError, ValueError):
+            score = 0.0
+        try:
+            coverage = float(classification.get("coverage_pct") or 0.0)
+        except (TypeError, ValueError):
+            coverage = 0.0
+        return state_rank, score, coverage
+
+    return sorted(candidates, key=key, reverse=True)
 
 
 class AlertState:
@@ -82,6 +114,8 @@ class AlertState:
         previous_score = previous.get("score")
         previous_time = float(previous.get("sent_at") or 0.0)
 
+        # A PRE_TRIGGER -> READY transition bypasses the normal cooldown because
+        # it represents a materially different state, not a duplicate alert.
         if state == "READY" and previous_state != "READY":
             return True
         if state == "PRE_TRIGGER" and previous_state not in {"PRE_TRIGGER", "READY"}:
@@ -135,10 +169,16 @@ async def scan_once(client: httpx.AsyncClient, state: AlertState) -> list[dict[s
     pretrigger_score = _env_float("MNT_PRETRIGGER_SCORE", 72.0, 0.0)
     pretrigger_coverage = _env_float("MNT_PRETRIGGER_COVERAGE", 55.0, 0.0)
     cooldown = _env_float("MNT_ALERT_COOLDOWN_SECONDS", 900.0, 0.0)
+    max_pretrigger_per_scan = _env_int("MNT_MAX_PRETRIGGER_ALERTS_PER_SCAN", 3, 0)
+    max_ready_per_scan = _env_int("MNT_MAX_READY_ALERTS_PER_SCAN", 5, 0)
     max_contract_cost_raw = os.getenv("MNT_MAX_CONTRACT_COST", "300").strip()
     max_contract_cost = float(max_contract_cost_raw) if max_contract_cost_raw else None
 
     results: list[dict[str, Any]] = []
+    alertable: list[dict[str, Any]] = []
+
+    # Evaluate the whole universe first. This lets MnT compare opportunities from
+    # the same scan instead of sending whichever ticker happened to be processed first.
     for symbol in _symbols():
         try:
             payload = await fetch_fusion(client, base_url, symbol, max_contract_cost)
@@ -147,16 +187,55 @@ async def scan_once(client: httpx.AsyncClient, state: AlertState) -> list[dict[s
                 pretrigger_score=pretrigger_score,
                 pretrigger_coverage=pretrigger_coverage,
             )
-            item = {"symbol": symbol, "classification": classification, "sent": False}
-            if classification.get("alert") and webhook and state.should_send(symbol, classification, cooldown):
-                await send_discord(client, webhook, build_discord_message(payload, classification))
-                state.mark_sent(symbol, classification)
-                item["sent"] = True
+            item = {
+                "symbol": symbol,
+                "classification": classification,
+                "payload": payload,
+                "sent": False,
+                "suppressed_by_rank": False,
+            }
+            results.append(item)
+            if classification.get("alert") and state.should_send(symbol, classification, cooldown):
+                alertable.append(item)
             else:
                 state.observe(symbol, classification)
-            results.append(item)
         except Exception as exc:
             results.append({"symbol": symbol, "error": type(exc).__name__, "sent": False})
+
+    ranked = rank_alert_candidates(alertable)
+    ready_sent = 0
+    pretrigger_sent = 0
+    for item in ranked:
+        classification = item["classification"]
+        alert_state = str(classification.get("state") or "")
+        if alert_state == "READY":
+            allowed = ready_sent < max_ready_per_scan if max_ready_per_scan > 0 else False
+        elif alert_state == "PRE_TRIGGER":
+            allowed = pretrigger_sent < max_pretrigger_per_scan if max_pretrigger_per_scan > 0 else False
+        else:
+            allowed = False
+
+        if not allowed:
+            item["suppressed_by_rank"] = True
+            continue
+        if not webhook:
+            continue
+
+        try:
+            await send_discord(client, webhook, build_discord_message(item["payload"], classification))
+            state.mark_sent(item["symbol"], classification)
+            item["sent"] = True
+            if alert_state == "READY":
+                ready_sent += 1
+            elif alert_state == "PRE_TRIGGER":
+                pretrigger_sent += 1
+        except Exception as exc:
+            item["send_error"] = type(exc).__name__
+
+    # Payloads can be large and may contain option-chain detail. Keep worker logs
+    # concise while preserving the classification/suppression decision.
+    for item in results:
+        item.pop("payload", None)
     return results
 
 
