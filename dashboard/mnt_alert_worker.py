@@ -60,12 +60,7 @@ def market_scan_active(now: datetime | None = None) -> bool:
 
 
 def rank_alert_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Rank alertable scan results without changing their underlying MnT score.
-
-    READY always outranks PRE_TRIGGER. Within the same state, higher Fusion score,
-    then better data coverage, wins. This ranking is delivery priority only; it is
-    not another trading model and does not alter the server-side execution gate.
-    """
+    """Rank alertable scan results without changing their underlying MnT score."""
     def key(item: dict[str, Any]) -> tuple[int, float, float]:
         classification = item.get("classification") or {}
         state = str(classification.get("state") or "")
@@ -81,6 +76,59 @@ def rank_alert_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, An
         return state_rank, score, coverage
 
     return sorted(candidates, key=key, reverse=True)
+
+
+def shortlist_from_radar(
+    radar: dict[str, Any] | None,
+    configured_symbols: list[str],
+    *,
+    limit: int = 4,
+) -> list[str]:
+    """Choose a small long/short-balanced set for expensive Fusion analysis.
+
+    `/api/radar` is intentionally cheap and technical-only. It is not allowed to
+    create an alert itself; it only decides which symbols deserve the slower full
+    Kronos/Gamma/flow/options Fusion pass on this scan.
+    """
+    configured = {symbol.upper() for symbol in configured_symbols}
+    limit = max(1, int(limit))
+    if not radar or not configured:
+        return configured_symbols[:limit]
+
+    def normalized(rows: Any, direction: str) -> list[dict[str, Any]]:
+        output = []
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            symbol = str(row.get("symbol") or "").upper()
+            if symbol not in configured:
+                continue
+            try:
+                rank_score = float(row.get("rank_score") or 0.0)
+            except (TypeError, ValueError):
+                rank_score = 0.0
+            output.append({"symbol": symbol, "direction": direction, "rank_score": rank_score})
+        output.sort(key=lambda item: item["rank_score"], reverse=True)
+        return output
+
+    longs = normalized(radar.get("longs"), "LONG")
+    shorts = normalized(radar.get("shorts"), "SHORT")
+    per_side = max(1, limit // 2)
+    selected = longs[:per_side] + shorts[:per_side]
+
+    # Fill unused slots with the strongest remaining radar names regardless of side.
+    selected_symbols = {item["symbol"] for item in selected}
+    leftovers = [item for item in longs[per_side:] + shorts[per_side:] if item["symbol"] not in selected_symbols]
+    leftovers.sort(key=lambda item: item["rank_score"], reverse=True)
+    selected.extend(leftovers[: max(0, limit - len(selected))])
+
+    result: list[str] = []
+    for item in selected:
+        if item["symbol"] not in result:
+            result.append(item["symbol"])
+        if len(result) >= limit:
+            break
+    return result or configured_symbols[:limit]
 
 
 class AlertState:
@@ -114,8 +162,6 @@ class AlertState:
         previous_score = previous.get("score")
         previous_time = float(previous.get("sent_at") or 0.0)
 
-        # A PRE_TRIGGER -> READY transition bypasses the normal cooldown because
-        # it represents a materially different state, not a duplicate alert.
         if state == "READY" and previous_state != "READY":
             return True
         if state == "PRE_TRIGGER" and previous_state not in {"PRE_TRIGGER", "READY"}:
@@ -139,8 +185,6 @@ class AlertState:
         self.save()
 
     def observe(self, symbol: str, classification: dict[str, Any]) -> None:
-        # Reset the state when an idea fully disappears so a later new setup can
-        # generate a fresh PRE_TRIGGER alert instead of being suppressed forever.
         if classification.get("state") in {"WATCH", "NO_DIRECTION", "REJECTED", "NO_CHASE"}:
             previous = self.data.get(symbol)
             if previous and previous.get("state") != "READY":
@@ -148,11 +192,18 @@ class AlertState:
                 self.save()
 
 
+async def fetch_radar(client: httpx.AsyncClient, base_url: str, limit: int = 20) -> dict[str, Any]:
+    response = await client.get(f"{base_url}/api/radar", params={"limit": max(3, min(20, limit))})
+    response.raise_for_status()
+    body = response.json()
+    return body if isinstance(body, dict) else {}
+
+
 async def fetch_fusion(client: httpx.AsyncClient, base_url: str, symbol: str, max_contract_cost: float | None) -> dict[str, Any]:
     params = {}
     if max_contract_cost is not None:
         params["max_contract_cost"] = max_contract_cost
-    response = await client.post(f"{base_url}/api/kronos/fusion/{symbol}", params=params)
+    response = await client.post(f"{base_url}/api/kronos/fusion/{symbol}", params=params, timeout=90.0)
     response.raise_for_status()
     body = response.json()
     return body if isinstance(body, dict) else {}
@@ -171,15 +222,32 @@ async def scan_once(client: httpx.AsyncClient, state: AlertState) -> list[dict[s
     cooldown = _env_float("MNT_ALERT_COOLDOWN_SECONDS", 900.0, 0.0)
     max_pretrigger_per_scan = _env_int("MNT_MAX_PRETRIGGER_ALERTS_PER_SCAN", 3, 0)
     max_ready_per_scan = _env_int("MNT_MAX_READY_ALERTS_PER_SCAN", 5, 0)
+    fusion_shortlist = _env_int("MNT_FUSION_SHORTLIST", 4, 1)
     max_contract_cost_raw = os.getenv("MNT_MAX_CONTRACT_COST", "300").strip()
     max_contract_cost = float(max_contract_cost_raw) if max_contract_cost_raw else None
+    configured_symbols = _symbols()
 
     results: list[dict[str, Any]] = []
     alertable: list[dict[str, Any]] = []
 
-    # Evaluate the whole universe first. This lets MnT compare opportunities from
-    # the same scan instead of sending whichever ticker happened to be processed first.
-    for symbol in _symbols():
+    try:
+        radar = await fetch_radar(client, base_url, limit=20)
+        scan_symbols = shortlist_from_radar(radar, configured_symbols, limit=fusion_shortlist)
+        radar_status = {
+            "used": True,
+            "cached": bool(radar.get("cached")),
+            "stale": bool(radar.get("stale")),
+            "shortlist": scan_symbols,
+        }
+    except Exception as exc:
+        # Do not turn a radar outage into a total alert outage. Fall back to a
+        # bounded subset so the expensive Fusion path still cannot explode in cost.
+        scan_symbols = configured_symbols[:fusion_shortlist]
+        radar_status = {"used": False, "error": type(exc).__name__, "shortlist": scan_symbols}
+
+    results.append({"stage": "radar", **radar_status})
+
+    for symbol in scan_symbols:
         try:
             payload = await fetch_fusion(client, base_url, symbol, max_contract_cost)
             classification = classify_alert(
@@ -232,8 +300,6 @@ async def scan_once(client: httpx.AsyncClient, state: AlertState) -> list[dict[s
         except Exception as exc:
             item["send_error"] = type(exc).__name__
 
-    # Payloads can be large and may contain option-chain detail. Keep worker logs
-    # concise while preserving the classification/suppression decision.
     for item in results:
         item.pop("payload", None)
     return results
