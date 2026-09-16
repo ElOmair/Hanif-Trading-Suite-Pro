@@ -1,3 +1,4 @@
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -89,3 +90,34 @@ def test_radar_shortlist_filters_to_configured_symbols_and_fills_slots():
 def test_radar_failure_fallback_is_bounded():
     configured = ["SPY", "QQQ", "NVDA", "TSLA", "AAPL"]
     assert shortlist_from_radar(None, configured, limit=3) == ["SPY", "QQQ", "NVDA"]
+
+
+def test_recent_pretrigger_stays_sticky(tmp_path):
+    state = AlertState(tmp_path / "state.json")
+    state.data = {
+        "SPY": {"state": "PRE_TRIGGER", "score": 77, "sent_at": time.time() - 20},
+        "NVDA": {"state": "PRE_TRIGGER", "score": 80, "sent_at": time.time() - 10},
+        "TSLA": {"state": "READY", "score": 82, "sent_at": time.time() - 5},
+    }
+    sticky = state.active_pretrigger_symbols(["SPY", "NVDA", "TSLA"], limit=2)
+    assert sticky == ["NVDA", "SPY"]
+
+
+def test_pretrigger_to_no_chase_requires_stand_down(tmp_path):
+    state = AlertState(tmp_path / "state.json")
+    state.mark_sent("SPY", {"state": "PRE_TRIGGER", "score": 76, "coverage_pct": 70})
+    assert state.needs_stand_down("SPY", {"state": "NO_CHASE"}) is True
+    assert state.needs_stand_down("SPY", {"state": "READY"}) is False
+
+
+def test_stale_alert_state_expires_and_does_not_suppress_new_setup(monkeypatch, tmp_path):
+    monkeypatch.setenv("MNT_ALERT_STATE_MAX_AGE_SECONDS", "60")
+    state = AlertState(tmp_path / "state.json")
+    state.data["SPY"] = {
+        "state": "PRE_TRIGGER",
+        "score": 76,
+        "coverage_pct": 70,
+        "sent_at": time.time() - 120,
+    }
+    assert state.should_send("SPY", {"state": "PRE_TRIGGER", "score": 76, "coverage_pct": 70}, 900) is True
+    assert "SPY" not in state.data
