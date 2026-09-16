@@ -25,12 +25,7 @@ def classify_alert(
     pretrigger_score: float = 72.0,
     pretrigger_coverage: float = 55.0,
 ) -> dict[str, Any]:
-    """Classify one Fusion payload into a Discord alert state.
-
-    READY means the server-side execution gate allows entry review. PRE_TRIGGER is
-    intentionally earlier: quality is building, but confirmation is not complete.
-    This prevents Discord from first speaking after the trigger has already passed.
-    """
+    """Classify one Fusion payload into a Discord alert state."""
     fusion = payload.get("fusion_score") or {}
     gate = payload.get("execution_gate") or {}
     technical = payload.get("technical") or {}
@@ -48,7 +43,15 @@ def classify_alert(
     if direction not in {"LONG", "SHORT"}:
         return {"alert": False, "state": "NO_DIRECTION", "symbol": symbol, "direction": direction}
     if "REJECT" in decision:
-        return {"alert": False, "state": "REJECTED", "symbol": symbol, "direction": direction}
+        return {
+            "alert": False,
+            "state": "REJECTED",
+            "symbol": symbol,
+            "direction": direction,
+            "score": score,
+            "coverage_pct": coverage,
+            "reason": str(gate.get("primary_reason") or "The setup no longer passes MnT's review rules."),
+        }
 
     if gate.get("entry_review_allowed") is True or gate_state == "REVIEW_ENTRY":
         return {
@@ -72,6 +75,7 @@ def classify_alert(
             "direction": direction,
             "score": score,
             "coverage_pct": coverage,
+            "reason": "Price moved beyond MnT's no-chase level before the entry was confirmed.",
         }
 
     if (
@@ -100,6 +104,7 @@ def classify_alert(
         "direction": direction,
         "score": score,
         "coverage_pct": coverage,
+        "reason": str(gate.get("primary_reason") or "The setup weakened before confirmation."),
     }
 
 
@@ -173,9 +178,41 @@ def build_discord_message(payload: dict[str, Any], classification: dict[str, Any
     lines.append("_Research alert only. MnT did not place an order._")
     return {
         "content": None,
+        "embeds": [{"title": title, "description": "\n".join(lines)}],
+    }
+
+
+def build_stand_down_message(payload: dict[str, Any], classification: dict[str, Any]) -> dict[str, Any]:
+    """Tell the user that an earlier PRE_TRIGGER idea should no longer be watched."""
+    technical = payload.get("technical") or {}
+    fusion = payload.get("fusion_score") or {}
+    symbol = classification.get("symbol") or payload.get("symbol") or "?"
+    direction = classification.get("direction") or fusion.get("direction") or "?"
+    state = str(classification.get("state") or "WATCH")
+    score = _number(fusion.get("score"))
+    price = _number(technical.get("price"))
+    reason = str(classification.get("reason") or "The setup changed before confirmation.")
+
+    if state == "NO_CHASE":
+        action = "Do not enter late. Wait for a new pullback/retest or a completely new MnT setup."
+    elif state == "REJECTED":
+        action = "Remove this setup from consideration unless MnT creates a new signal later."
+    else:
+        action = "The early setup lost enough quality that MnT no longer wants you preparing an entry."
+
+    lines = [
+        f"**Previous idea:** {direction}",
+        f"**Current stock price:** {_money(price)}",
+        f"**Current MnT score:** {score:.0f}/100" if score is not None else "**Current MnT score:** —",
+        f"**Why:** {reason}",
+        f"**Action now:** {action}",
+        "_This cancels the earlier PRE-TRIGGER watch; it is not an exit instruction for an existing position._",
+    ]
+    return {
+        "content": None,
         "embeds": [
             {
-                "title": title,
+                "title": f"⚪ STAND DOWN • {symbol} • {direction}",
                 "description": "\n".join(lines),
             }
         ],
