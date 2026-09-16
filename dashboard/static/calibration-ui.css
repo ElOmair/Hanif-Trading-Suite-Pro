@@ -1,0 +1,73 @@
+.mnt-calibration {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.58);
+}
+
+.mnt-calibration-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.mnt-calibration-head h4 {
+  margin: 2px 0 0;
+  font-size: 0.9rem;
+}
+
+.mnt-calibration-samples {
+  padding: 4px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(96, 165, 250, 0.22);
+  background: rgba(59, 130, 246, 0.08);
+  font-size: 0.65rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.mnt-calibration-body {
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+.mnt-calibration-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.mnt-calibration-grid > div {
+  padding: 8px;
+  border-radius: 9px;
+  background: rgba(2, 6, 23, 0.42);
+}
+
+.mnt-calibration-grid span {
+  display: block;
+  margin-bottom: 3px;
+  opacity: 0.7;
+  font-size: 0.64rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.mnt-calibration-grid strong {
+  font-size: 0.86rem;
+}
+
+.mnt-calibration-caution {
+  margin-top: 8px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  background: rgba(234, 179, 8, 0.07);
+  border: 1px solid rgba(234, 179, 8, 0.16);
+}
+
+@media (max-width: 700px) {
+  .mnt-calibration-grid { grid-template-columns: 1fr 1fr; }
+  .mnt-calibration-head { align-items: flex-start; }
+}

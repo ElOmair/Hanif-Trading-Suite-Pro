@@ -14,6 +14,12 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 
+from flow_provider import fetch_flow_context
+from gamma_provider import fetch_gamma_context
+from mnt_engine import build_fusion_score
+from signal_calibrator import calibrate_symbol_signals
+from signal_store import calibration_summary, list_signals, record_signal
+
 router = APIRouter(prefix="/api/kronos", tags=["kronos"])
 
 KRONOS_ROOT = Path(os.getenv("KRONOS_ROOT", "/home/airomair/Kronos"))
@@ -268,6 +274,48 @@ def _directional_features(symbol: str) -> dict[str, Any]:
     }
 
 
+def _market_regime() -> dict[str, Any]:
+    snapshots: list[dict[str, Any]] = []
+    for symbol in ("SPY", "QQQ"):
+        try:
+            snapshots.append(_directional_features(symbol))
+        except Exception:
+            continue
+    if not snapshots:
+        return {
+            "available": False,
+            "status": "not_available",
+            "reason": "SPY/QQQ 5-minute context is not available in the Kronos data folder yet.",
+        }
+    raw_scores = [float(item.get("technical_score_preview") or 50.0) for item in snapshots]
+    raw = sum(raw_scores) / len(raw_scores)
+    sentiment = "BULLISH" if raw >= 57 else "BEARISH" if raw <= 43 else "NEUTRAL"
+    conviction = 50.0 + abs(raw - 50.0)
+    return {
+        "available": True,
+        "status": "ok",
+        "sentiment": sentiment,
+        "score": round(min(100.0, conviction), 1),
+        "raw_directional_score": round(raw, 1),
+        "benchmarks": [
+            {
+                "symbol": item.get("symbol"),
+                "signal": item.get("signal"),
+                "score": item.get("technical_score_preview"),
+                "vwap": item.get("vwap"),
+            }
+            for item in snapshots
+        ],
+        "beginner_explanation": (
+            "The broader market is helping bullish trades."
+            if sentiment == "BULLISH"
+            else "The broader market is helping bearish trades."
+            if sentiment == "BEARISH"
+            else "The broader market is mixed, so individual trades need stronger proof."
+        ),
+    }
+
+
 def _decision_label(decision: Any) -> str:
     if isinstance(decision, dict):
         for key in ("decision", "action", "state", "status"):
@@ -284,9 +332,73 @@ def _import_kronos_module(name: str):
     return importlib.import_module(name)
 
 
+def _refresh_calibration(symbol: str) -> dict[str, Any]:
+    try:
+        return calibrate_symbol_signals(symbol, DATA_DIR)
+    except Exception as exc:
+        return {"symbol": symbol, "status": "error", "error": type(exc).__name__}
+
+
+def _finalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    symbol = str(payload.get("symbol") or "").upper()
+    payload["calibration_refresh"] = _refresh_calibration(symbol) if symbol else {"status": "skipped"}
+    try:
+        payload["signal_id"] = record_signal(payload)
+    except Exception as exc:
+        payload["signal_id"] = None
+        payload["signal_store_error"] = type(exc).__name__
+    return payload
+
+
 @router.post("/analyze/{symbol}")
 async def analyze(symbol: str) -> dict[str, Any]:
     return await run_kronos_analysis(symbol)
+
+
+@router.get("/gamma/{symbol}")
+async def gamma(symbol: str, spot: float | None = Query(None, gt=0)) -> dict[str, Any]:
+    symbol = symbol.strip().upper()
+    if not SYMBOL_RE.fullmatch(symbol):
+        raise HTTPException(status_code=400, detail="Invalid symbol")
+    return await fetch_gamma_context(symbol, spot)
+
+
+@router.get("/flow/{symbol}")
+async def flow(symbol: str) -> dict[str, Any]:
+    symbol = symbol.strip().upper()
+    if not SYMBOL_RE.fullmatch(symbol):
+        raise HTTPException(status_code=400, detail="Invalid symbol")
+    return await fetch_flow_context(symbol)
+
+
+@router.get("/market-regime")
+async def market_regime() -> dict[str, Any]:
+    return _market_regime()
+
+
+@router.get("/signals")
+async def signals(symbol: str | None = Query(None), limit: int = Query(50, ge=1, le=500)) -> dict[str, Any]:
+    if symbol is not None:
+        symbol = symbol.strip().upper()
+        if not SYMBOL_RE.fullmatch(symbol):
+            raise HTTPException(status_code=400, detail="Invalid symbol")
+    try:
+        items = list_signals(symbol=symbol, limit=limit)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Signal history unavailable: {type(exc).__name__}") from exc
+    return {"symbol": symbol, "count": len(items), "signals": items}
+
+
+@router.get("/signals/calibration")
+async def signal_calibration(symbol: str | None = Query(None), limit: int = Query(500, ge=1, le=500)) -> dict[str, Any]:
+    if symbol is not None:
+        symbol = symbol.strip().upper()
+        if not SYMBOL_RE.fullmatch(symbol):
+            raise HTTPException(status_code=400, detail="Invalid symbol")
+    try:
+        return calibration_summary(symbol=symbol, limit=limit)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Calibration summary unavailable: {type(exc).__name__}") from exc
 
 
 @router.post("/fusion/{symbol}")
@@ -295,39 +407,68 @@ async def fusion(
     max_contract_cost: float | None = Query(None, gt=0, le=100000),
 ) -> dict[str, Any]:
     symbol = symbol.strip().upper()
+    if not SYMBOL_RE.fullmatch(symbol):
+        raise HTTPException(status_code=400, detail="Invalid symbol")
+
     kronos = await run_kronos_analysis(symbol)
     alert = _directional_features(symbol)
     market_gate = _opening_market_gate()
+    gamma_context, flow_context, market_context = await asyncio.gather(
+        fetch_gamma_context(symbol, float(alert.get("price") or 0.0) or None),
+        fetch_flow_context(symbol),
+        asyncio.to_thread(_market_regime),
+    )
 
     if market_gate["active"]:
-        return {
+        fusion_score = build_fusion_score(
+            technical=alert,
+            kronos=kronos,
+            gamma=gamma_context,
+            flow=flow_context,
+            market=market_context,
+            options=[],
+        )
+        return _finalize_payload({
             "symbol": symbol,
             "technical": _jsonable(alert),
             "kronos": _jsonable(kronos),
-            "decision": {
-                "decision": "WATCH",
-                "reason": market_gate["reason"],
-            },
+            "gamma": gamma_context,
+            "flow": flow_context,
+            "market_regime": market_context,
+            "fusion_score": fusion_score,
+            "decision": {"decision": "WATCH", "reason": market_gate["reason"]},
             "trade_plan": None,
             "options": [],
             "option_scan_ran": False,
             "market_gate": market_gate,
             "research_only": True,
             "note": "Opening lockout active. No actionable setup is produced until the first 5-minute candle closes at 09:35 ET.",
-        }
+        })
 
     if alert["signal"] == "NEUTRAL":
-        return {
+        fusion_score = build_fusion_score(
+            technical=alert,
+            kronos=kronos,
+            gamma=gamma_context,
+            flow=flow_context,
+            market=market_context,
+            options=[],
+        )
+        return _finalize_payload({
             "symbol": symbol,
             "technical": alert,
             "kronos": kronos,
+            "gamma": gamma_context,
+            "flow": flow_context,
+            "market_regime": market_context,
+            "fusion_score": fusion_score,
             "decision": {"decision": "WATCH", "reason": "Dashboard technical layer is neutral."},
             "trade_plan": None,
             "options": [],
             "option_scan_ran": False,
             "market_gate": market_gate,
             "research_only": True,
-        }
+        })
 
     try:
         decision_engine = _import_kronos_module("trading.decision_engine")
@@ -360,15 +501,28 @@ async def fusion(
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"Option selector failed: {type(exc).__name__}: {exc}") from exc
 
-    return {
+    json_options = _jsonable(options)
+    fusion_score = build_fusion_score(
+        technical=_jsonable(alert),
+        kronos=_jsonable(kronos),
+        gamma=gamma_context,
+        flow=flow_context,
+        market=market_context,
+        options=json_options,
+    )
+    return _finalize_payload({
         "symbol": symbol,
         "technical": _jsonable(alert),
         "kronos": _jsonable(kronos),
+        "gamma": gamma_context,
+        "flow": flow_context,
+        "market_regime": market_context,
+        "fusion_score": fusion_score,
         "decision": _jsonable(decision),
         "trade_plan": _jsonable(trade_plan),
-        "options": _jsonable(options),
+        "options": json_options,
         "option_scan_ran": option_scan_ran,
         "market_gate": market_gate,
         "research_only": True,
         "note": "Option candidates are mechanical model fits. No order is placed by this dashboard.",
-    }
+    })
