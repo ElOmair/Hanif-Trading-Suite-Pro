@@ -78,6 +78,32 @@ def rank_alert_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, An
     return sorted(candidates, key=key, reverse=True)
 
 
+def select_alert_delivery(
+    candidates: list[dict[str, Any]],
+    *,
+    max_pretrigger: int,
+    max_ready: int,
+) -> list[dict[str, Any]]:
+    """Apply delivery caps after ranking, independent of Discord availability."""
+    selected: list[dict[str, Any]] = []
+    pretrigger_count = 0
+    ready_count = 0
+    for item in rank_alert_candidates(candidates):
+        state = str((item.get("classification") or {}).get("state") or "")
+        allowed = False
+        if state == "READY" and ready_count < max(0, int(max_ready)):
+            ready_count += 1
+            allowed = True
+        elif state == "PRE_TRIGGER" and pretrigger_count < max(0, int(max_pretrigger)):
+            pretrigger_count += 1
+            allowed = True
+        if allowed:
+            selected.append(item)
+        else:
+            item["suppressed_by_rank"] = True
+    return selected
+
+
 def shortlist_from_radar(
     radar: dict[str, Any] | None,
     configured_symbols: list[str],
@@ -309,7 +335,6 @@ async def scan_once(client: httpx.AsyncClient, state: AlertState) -> list[dict[s
         except Exception as exc:
             results.append({"symbol": symbol, "error": type(exc).__name__, "sent": False})
 
-    # Close the loop on previously sent PRE_TRIGGER ideas before sending fresh ideas.
     for item in stand_downable:
         if webhook:
             try:
@@ -321,22 +346,14 @@ async def scan_once(client: httpx.AsyncClient, state: AlertState) -> list[dict[s
         else:
             state.clear(item["symbol"])
 
-    ranked = rank_alert_candidates(alertable)
-    ready_sent = 0
-    pretrigger_sent = 0
-    for item in ranked:
+    selected = select_alert_delivery(
+        alertable,
+        max_pretrigger=max_pretrigger_per_scan,
+        max_ready=max_ready_per_scan,
+    )
+    for item in selected:
         classification = item["classification"]
         alert_state = str(classification.get("state") or "")
-        if alert_state == "READY":
-            allowed = ready_sent < max_ready_per_scan if max_ready_per_scan > 0 else False
-        elif alert_state == "PRE_TRIGGER":
-            allowed = pretrigger_sent < max_pretrigger_per_scan if max_pretrigger_per_scan > 0 else False
-        else:
-            allowed = False
-
-        if not allowed:
-            item["suppressed_by_rank"] = True
-            continue
 
         if alert_state == "READY":
             try:
@@ -352,13 +369,10 @@ async def scan_once(client: httpx.AsyncClient, state: AlertState) -> list[dict[s
             state.mark_sent(item["symbol"], classification)
             item["sent"] = True
             if alert_state == "READY":
-                ready_sent += 1
                 try:
                     item["shadow_trade_id"] = record_ready_shadow_trade(item["payload"], discord_sent=True)
                 except Exception as exc:
                     item["shadow_delivery_update_error"] = type(exc).__name__
-            elif alert_state == "PRE_TRIGGER":
-                pretrigger_sent += 1
         except Exception as exc:
             item["send_error"] = type(exc).__name__
 
