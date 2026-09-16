@@ -1,4 +1,4 @@
-from alert_policy import build_discord_message, classify_alert
+from alert_policy import build_discord_message, build_stand_down_message, classify_alert
 
 
 def _base_payload():
@@ -44,6 +44,7 @@ def test_no_chase_blocks_alert():
     result = classify_alert(payload)
     assert result["alert"] is False
     assert result["state"] == "NO_CHASE"
+    assert "no-chase" in result["reason"]
 
 
 def test_low_coverage_does_not_pretrigger():
@@ -63,3 +64,15 @@ def test_message_explains_pretrigger_and_no_chase_level():
     assert "Do not chase past" in text
     assert "Gamma" in text
     assert "Options flow" in text
+
+
+def test_stand_down_message_cancels_pretrigger_not_existing_position():
+    payload = _base_payload()
+    payload["execution_gate"]["no_chase"]["blocked"] = True
+    classification = classify_alert(payload)
+    message = build_stand_down_message(payload, classification)
+    text = message["embeds"][0]["description"]
+    assert "Do not enter late" in text
+    assert "cancels the earlier PRE-TRIGGER watch" in text
+    assert "not an exit instruction" in text
+    assert "STAND DOWN" in message["embeds"][0]["title"]
