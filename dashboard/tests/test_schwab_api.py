@@ -1,13 +1,23 @@
 import schwab_api
 from app_schwab import app
+from fastapi.testclient import TestClient
 
 
-def _paths():
-    return {path for route in app.routes if (path := getattr(route, "path", None))}
+def _router_paths():
+    return {getattr(route, "path", "") for route in schwab_api.router.routes}
 
 
-def test_schwab_routes_are_mounted_on_dashboard():
-    paths = _paths()
+def test_schwab_routes_are_mounted_on_dashboard(monkeypatch):
+    monkeypatch.setattr(
+        schwab_api,
+        "token_status",
+        lambda: {"configured": False, "authorized": False},
+    )
+    response = TestClient(app).get("/api/schwab/status")
+    assert response.status_code == 200
+    assert response.json()["phase"] == "READ_ONLY_PHASE_1"
+
+    paths = _router_paths()
     assert "/api/schwab/status" in paths
     assert "/api/schwab/authorize" in paths
     assert "/api/schwab/auth-url" in paths
@@ -19,7 +29,7 @@ def test_schwab_routes_are_mounted_on_dashboard():
 
 
 def test_no_schwab_order_route_is_exposed_yet():
-    paths = _paths()
+    paths = _router_paths()
     assert not any(path.startswith("/api/schwab/orders") for path in paths)
     assert not any(path.startswith("/api/schwab/order") for path in paths)
 
