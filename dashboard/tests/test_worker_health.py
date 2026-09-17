@@ -3,6 +3,7 @@ from worker_health import build_worker_status, read_worker_status, write_worker_
 
 def test_healthy_status_summarizes_scan(tmp_path):
     results = [
+        {"stage": "session_risk", "state": "NORMAL", "tripped": False, "enforced": False, "entry_review_blocked": False},
         {"stage": "radar", "used": True, "cached": False, "stale": False, "shortlist": ["SPY", "NVDA"]},
         {
             "symbol": "SPY",
@@ -37,6 +38,28 @@ def test_healthy_status_summarizes_scan(tmp_path):
     assert status["shadow"]["ready_records_written"] == 1
     assert status["shadow"]["option_marks"]["marks_recorded"] == 2
     assert status["shadow"]["option_marks"]["feed"] == "indicative"
+    assert status["session_risk"]["state"] == "NORMAL"
+
+
+def test_risk_paused_status_is_explicit():
+    status = build_worker_status(
+        [
+            {
+                "stage": "session_risk",
+                "state": "PAUSE_NEW_ALERTS",
+                "tripped": True,
+                "enforced": True,
+                "entry_review_blocked": True,
+                "ready_ideas_today": 8,
+                "consecutive_bad_option_marks": 3,
+                "reasons": ["risk limit"],
+            }
+        ],
+        market_active=True,
+    )
+    assert status["worker_state"] == "RISK_PAUSED"
+    assert status["session_risk"]["entry_review_blocked"] is True
+    assert status["session_risk"]["ready_ideas_today"] == 8
 
 
 def test_partial_status_when_some_fusion_requests_fail():
