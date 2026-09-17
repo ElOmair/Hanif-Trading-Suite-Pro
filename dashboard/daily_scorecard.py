@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import statistics
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -43,6 +43,27 @@ def _session_date(value: str | date | None, now: datetime | None = None) -> date
     return now.date()
 
 
+def _horizon_eligible_trade(
+    trade: dict[str, Any],
+    *,
+    horizon_minutes: int,
+    max_timing_error_minutes: float,
+) -> bool:
+    created = _parse_time(trade.get("created_at"))
+    option_symbol = str(trade.get("option_symbol") or "").strip()
+    entry_ask = _number(trade.get("option_ask"))
+    if created is None or not option_symbol or entry_ask is None or entry_ask <= 0:
+        return False
+    created_et = created.astimezone(ET)
+    # Regular options quotes end at the normal session close. A source quote can
+    # still be accepted when its timestamp is within the configured timing error
+    # of the nominal horizon, so allow target times through close + tolerance.
+    close_et = datetime.combine(created_et.date(), time(16, 0), tzinfo=ET)
+    target_et = created_et + timedelta(minutes=int(horizon_minutes))
+    latest_acceptable_target = close_et + timedelta(minutes=float(max_timing_error_minutes))
+    return target_et <= latest_acceptable_target
+
+
 def build_daily_scorecard(
     session_date: str | date | None = None,
     *,
@@ -66,9 +87,21 @@ def build_daily_scorecard(
         if trade.get("id") is not None:
             trade_ids.add(int(trade["id"]))
 
+    eligible_trade_ids = {
+        int(trade["id"])
+        for trade in day_trades
+        if trade.get("id") is not None
+        and _horizon_eligible_trade(
+            trade,
+            horizon_minutes=option_horizon_minutes,
+            max_timing_error_minutes=max_mark_lag_minutes,
+        )
+    }
+
     day_marks = []
     for mark in all_marks:
-        if int(mark.get("shadow_trade_id") or -1) not in trade_ids:
+        trade_id = int(mark.get("shadow_trade_id") or -1)
+        if trade_id not in trade_ids:
             continue
         if int(mark.get("horizon_minutes") or 0) != int(option_horizon_minutes):
             continue
@@ -77,6 +110,12 @@ def build_daily_scorecard(
         if timing_error is None or result is None or timing_error > float(max_mark_lag_minutes):
             continue
         day_marks.append(mark)
+
+    measured_trade_ids = {int(mark.get("shadow_trade_id") or -1) for mark in day_marks}
+    eligible_count = len(eligible_trade_ids)
+    measured_count = len(eligible_trade_ids & measured_trade_ids)
+    missing_eligible = max(0, eligible_count - measured_count)
+    completeness_pct = 100.0 * measured_count / eligible_count if eligible_count else None
 
     returns = [float(mark["return_bid_vs_entry_ask_pct"]) for mark in day_marks]
     positive = sum(1 for value in returns if value > 0)
@@ -151,6 +190,13 @@ def build_daily_scorecard(
         },
         "option_horizon_minutes": int(option_horizon_minutes),
         "max_timing_error_minutes": float(max_mark_lag_minutes),
+        "option_evidence": {
+            "eligible_trades": eligible_count,
+            "measured_trades": measured_count,
+            "missing_eligible_trades": missing_eligible,
+            "completeness_pct": round(completeness_pct, 1) if completeness_pct is not None else None,
+            "complete": missing_eligible == 0,
+        },
         "option_marks": {
             "count": len(returns),
             "positive_count": positive,
