@@ -7,6 +7,7 @@ from pathlib import Path
 
 import httpx
 
+from daily_scorecard_alert import maybe_send_daily_scorecard
 from learning_snapshot import write_learning_snapshot
 from mnt_alert_worker import AlertState, _env_float, market_scan_active, scan_once
 from option_shadow_collector import refresh_due_option_marks
@@ -54,6 +55,24 @@ async def run_forever() -> None:
                     # when new alert delivery is paused by the optional risk governor.
                     option_marks = await refresh_due_option_marks(client)
                     results.append({"stage": "option_marks", **option_marks})
+
+                # This is evaluated on every supervisor loop, including after-hours,
+                # so a scorecard configured for 16:15 ET is not dependent on the
+                # intraday scanner still being active. State prevents duplicate sends.
+                try:
+                    scorecard_delivery = await maybe_send_daily_scorecard(client)
+                    results.append({"stage": "daily_scorecard", **scorecard_delivery})
+                except Exception as scorecard_exc:
+                    results.append(
+                        {
+                            "stage": "daily_scorecard",
+                            "status": "error",
+                            "sent": False,
+                            "error": type(scorecard_exc).__name__,
+                        }
+                    )
+
+                if active or any(item.get("stage") == "daily_scorecard" and item.get("sent") for item in results):
                     print(
                         json.dumps(
                             {"time": _iso_now(), "results": results},
