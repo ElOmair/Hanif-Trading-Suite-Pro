@@ -68,10 +68,12 @@ def due_for_delivery(now: datetime | None = None, state: dict[str, Any] | None =
 
 def build_scorecard_message(scorecard: dict[str, Any]) -> dict[str, Any]:
     marks = scorecard.get("option_marks") or {}
+    evidence = scorecard.get("option_evidence") or {}
     underlying = scorecard.get("underlying_outcomes") or {}
     best = scorecard.get("best_option") or {}
     worst = scorecard.get("worst_option") or {}
     quality = str(scorecard.get("quality_state") or "COLLECTING").upper()
+    complete = bool(evidence.get("complete", True))
     quality_emoji = {"STRONG": "🟢", "MIXED": "🟡", "WEAK": "🔴", "COLLECTING": "🔵"}.get(quality, "🔵")
 
     def pct(value: Any) -> str:
@@ -88,20 +90,22 @@ def build_scorecard_message(scorecard: dict[str, Any]) -> dict[str, Any]:
         f"**Underlying target-first:** {underlying.get('wins', 0)}W / {underlying.get('losses', 0)}L" + (f" ({float(underlying['target_first_win_rate_pct']):.1f}%)" if underlying.get("target_first_win_rate_pct") is not None else ""),
         f"**{int(scorecard.get('option_horizon_minutes') or 60)}m option marks:** {int(marks.get('count') or 0)} · avg {pct(marks.get('average_return_pct'))} · positive {float(marks['positive_rate_pct']):.1f}%" if marks.get("positive_rate_pct") is not None else f"**{int(scorecard.get('option_horizon_minutes') or 60)}m option marks:** {int(marks.get('count') or 0)}",
     ]
+    if evidence:
+        coverage = evidence.get("completeness_pct")
+        coverage_text = f" ({float(coverage):.1f}%)" if coverage is not None else ""
+        lines.append(f"**Evidence coverage:** {int(evidence.get('measured_trades') or 0)}/{int(evidence.get('eligible_trades') or 0)} eligible ideas measured{coverage_text}")
+        if not complete:
+            lines.append("⚠️ **Partial evidence:** one or more horizon-eligible option ideas do not have a valid time-aligned mark.")
     if best:
         lines.append(f"**Best:** {best.get('underlying') or '?'} {best.get('direction') or ''} · {pct(best.get('return_pct'))}")
     if worst:
         lines.append(f"**Worst:** {worst.get('underlying') or '?'} {worst.get('direction') or ''} · {pct(worst.get('return_pct'))}")
     lines.append(f"**Next session:** {scorecard.get('next_session_note') or 'Keep collecting shadow evidence.'}")
     lines.append("_Shadow/research scorecard only. No brokerage orders were placed by MnT._")
+    title_suffix = " · PARTIAL" if not complete else ""
     return {
         "content": None,
-        "embeds": [
-            {
-                "title": f"{quality_emoji} MnT Daily Scorecard · {scorecard.get('session_date_et') or ''}",
-                "description": "\n".join(lines),
-            }
-        ],
+        "embeds": [{"title": f"{quality_emoji} MnT Daily Scorecard{title_suffix} · {scorecard.get('session_date_et') or ''}", "description": "\n".join(lines)}],
     }
 
 
@@ -123,12 +127,15 @@ async def maybe_send_daily_scorecard(client: httpx.AsyncClient, now: datetime | 
     response = await client.post(webhook, json=build_scorecard_message(scorecard), timeout=15.0)
     response.raise_for_status()
     sent_at = (now or datetime.now(ET)).astimezone(ET).isoformat()
+    evidence = scorecard.get("option_evidence") or {}
     _save_state({"last_sent_session_date": session_date, "sent_at": sent_at}, path)
     return {
-        "status": "sent",
+        "status": "sent_partial" if evidence and not evidence.get("complete", True) else "sent",
         "sent": True,
         "session_date_et": session_date,
         "quality_state": scorecard.get("quality_state"),
         "ready_ideas": scorecard.get("ready_ideas"),
         "option_marks": (scorecard.get("option_marks") or {}).get("count"),
+        "evidence_complete": evidence.get("complete"),
+        "missing_eligible_trades": evidence.get("missing_eligible_trades"),
     }
