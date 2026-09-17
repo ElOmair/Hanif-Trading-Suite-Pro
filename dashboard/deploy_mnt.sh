@@ -7,6 +7,7 @@ VENV_DIR="${MNT_VENV_DIR:-/home/airomair/kronos-venv}"
 SYSTEMD_DIR="/etc/systemd/system"
 DASHBOARD_SERVICE="hanif-dashboard.service"
 WORKER_SERVICE="mnt-alert-worker.service"
+MNT_ENV_FILE="${DASHBOARD_DIR}/mnt.env"
 
 log() {
   printf '\n[MnT deploy] %s\n' "$*"
@@ -21,6 +22,7 @@ fail() {
 [[ -d "${DASHBOARD_DIR}" ]] || fail "Dashboard directory not found at ${DASHBOARD_DIR}"
 [[ -x "${VENV_DIR}/bin/python" ]] || fail "Python virtualenv missing at ${VENV_DIR}"
 [[ -x "${VENV_DIR}/bin/pip" ]] || fail "pip missing at ${VENV_DIR}"
+[[ -f /home/airomair/Kronos/.env ]] || fail "Shared Kronos environment file missing at /home/airomair/Kronos/.env"
 
 cd "${REPO_ROOT}"
 
@@ -34,12 +36,13 @@ log "Commit: $(git rev-parse --short HEAD)"
 
 cd "${DASHBOARD_DIR}"
 
-if [[ ! -f .env ]]; then
-  log "Creating dashboard/.env from .env.example (existing Kronos/.env is also loaded by systemd)"
-  cp .env.example .env
-  chmod 600 .env
+if [[ ! -f "${MNT_ENV_FILE}" ]]; then
+  log "Creating MnT-only override file from mnt.env.example"
+  cp mnt.env.example "${MNT_ENV_FILE}"
+  chmod 600 "${MNT_ENV_FILE}"
+  log "Review ${MNT_ENV_FILE} to add Discord/UW values when ready; shared Alpaca credentials remain in Kronos/.env"
 else
-  log "Keeping existing dashboard/.env unchanged"
+  log "Keeping existing mnt.env unchanged"
 fi
 
 log "Installing/updating dashboard Python dependencies in ${VENV_DIR}"
@@ -72,6 +75,12 @@ done
 }
 
 log "Running MnT preflight before starting unattended worker"
+set -a
+# shellcheck disable=SC1091
+source /home/airomair/Kronos/.env
+# shellcheck disable=SC1090
+source "${MNT_ENV_FILE}"
+set +a
 "${VENV_DIR}/bin/python" mnt_preflight.py
 
 log "Enabling and restarting alert supervisor"
