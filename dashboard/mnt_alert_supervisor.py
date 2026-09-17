@@ -9,6 +9,7 @@ import httpx
 
 from mnt_alert_worker import AlertState, _env_float, market_scan_active, scan_once
 from option_shadow_collector import refresh_due_option_marks
+from session_risk import session_risk_status
 from worker_health import build_worker_status, write_worker_status
 
 
@@ -35,8 +36,21 @@ async def run_forever() -> None:
             results = []
             loop_error = None
             try:
+                risk = session_risk_status()
+                results.append({"stage": "session_risk", **risk})
                 if active:
-                    results = await scan_once(client, state)
+                    if not risk.get("entry_review_blocked"):
+                        results.extend(await scan_once(client, state))
+                    else:
+                        results.append(
+                            {
+                                "stage": "scanner_pause",
+                                "reason": "session_risk_governor",
+                                "beginner_explanation": risk.get("beginner_explanation"),
+                            }
+                        )
+                    # Existing READY shadow trades keep receiving option marks even
+                    # when new alert delivery is paused by the optional risk governor.
                     option_marks = await refresh_due_option_marks(client)
                     results.append({"stage": "option_marks", **option_marks})
                     print(
