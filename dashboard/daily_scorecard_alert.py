@@ -124,18 +124,41 @@ async def maybe_send_daily_scorecard(client: httpx.AsyncClient, now: datetime | 
 
     horizon = _env_int("MNT_DAILY_SCORECARD_OPTION_HORIZON", 60, 1)
     scorecard = build_daily_scorecard(session_date, option_horizon_minutes=horizon)
+    mark_count = int((scorecard.get("option_marks") or {}).get("count") or 0)
+    ready_count = int(scorecard.get("ready_ideas") or 0)
+    completed_at = (now or datetime.now(ET)).astimezone(ET).isoformat()
+
+    # Weekday market holidays and genuinely inactive sessions should not create an
+    # empty Discord message. Persist completion so the supervisor does not repeat
+    # the same no-activity decision every minute for the rest of the evening.
+    if ready_count == 0 and mark_count == 0:
+        _save_state(
+            {
+                "last_sent_session_date": session_date,
+                "completed_at": completed_at,
+                "status": "no_activity",
+            },
+            path,
+        )
+        return {
+            "status": "no_activity",
+            "sent": False,
+            "session_date_et": session_date,
+            "ready_ideas": 0,
+            "option_marks": 0,
+        }
+
     response = await client.post(webhook, json=build_scorecard_message(scorecard), timeout=15.0)
     response.raise_for_status()
-    sent_at = (now or datetime.now(ET)).astimezone(ET).isoformat()
     evidence = scorecard.get("option_evidence") or {}
-    _save_state({"last_sent_session_date": session_date, "sent_at": sent_at}, path)
+    _save_state({"last_sent_session_date": session_date, "sent_at": completed_at, "status": "sent"}, path)
     return {
         "status": "sent_partial" if evidence and not evidence.get("complete", True) else "sent",
         "sent": True,
         "session_date_et": session_date,
         "quality_state": scorecard.get("quality_state"),
-        "ready_ideas": scorecard.get("ready_ideas"),
-        "option_marks": (scorecard.get("option_marks") or {}).get("count"),
+        "ready_ideas": ready_count,
+        "option_marks": mark_count,
         "evidence_complete": evidence.get("complete"),
         "missing_eligible_trades": evidence.get("missing_eligible_trades"),
     }
