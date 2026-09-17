@@ -5,9 +5,11 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from kronos_api import _directional_features
 from schwab_contracts import rank_option_candidates
 from schwab_fundamentals import score_equity_quote
-from schwab_portfolio import build_symbol_context
+from schwab_portfolio import build_symbol_context, underlying_symbol
+from schwab_position_manager import build_portfolio_reviews
 from schwab_provider import begin_oauth, configured, exchange_code, option_chain, positions, quotes, token_status
 
 router = APIRouter(prefix="/api/schwab", tags=["schwab"])
@@ -83,6 +85,37 @@ async def callback(code: str = Query(...), state: str | None = Query(None)) -> H
 async def account_positions() -> dict[str, Any]:
     try:
         return await positions()
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get("/portfolio/review")
+async def portfolio_review() -> dict[str, Any]:
+    """Review connected positions using current local MnT technical direction.
+
+    This is research-only position management guidance and never submits orders.
+    """
+    try:
+        payload = await positions()
+        symbols: set[str] = set()
+        for account in payload.get("accounts") or []:
+            for row in account.get("positions") or []:
+                symbol = underlying_symbol(row.get("symbol"), row.get("asset_type"))
+                if symbol:
+                    symbols.add(symbol)
+
+        technical_by_symbol: dict[str, dict[str, Any]] = {}
+        unavailable: list[str] = []
+        for symbol in sorted(symbols):
+            try:
+                technical_by_symbol[symbol] = _directional_features(symbol)
+            except Exception:
+                unavailable.append(symbol)
+
+        report = build_portfolio_reviews(payload, technical_by_symbol=technical_by_symbol)
+        report["technical_symbols_available"] = sorted(technical_by_symbol)
+        report["technical_symbols_unavailable"] = unavailable
+        return report
     except Exception as exc:
         raise _http_error(exc) from exc
 
