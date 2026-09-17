@@ -10,6 +10,7 @@ def test_schwab_routes_are_mounted_on_dashboard():
     assert "/api/schwab/positions" in paths
     assert "/api/schwab/quotes" in paths
     assert "/api/schwab/options/{symbol}" in paths
+    assert "/api/schwab/options/{symbol}/candidates" in paths
 
 
 def test_no_schwab_order_route_is_exposed_yet():
