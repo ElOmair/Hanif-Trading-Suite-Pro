@@ -107,6 +107,17 @@ def configuration_checks(env: Mapping[str, str] | None = None) -> list[dict[str,
                 else "MNT_SCHWAB_ENABLED=true requires SCHWAB_APP_KEY, SCHWAB_APP_SECRET, and an HTTPS SCHWAB_CALLBACK_URL."
             ),
         )
+        order_requested = _enabled(env.get("MNT_SCHWAB_ORDER_SUBMISSION_ENABLED"), False)
+        add(
+            "schwab_phase1_read_only",
+            not order_requested,
+            required=True,
+            detail=(
+                "Schwab Phase 1 is read-only; brokerage order submission is disabled."
+                if not order_requested
+                else "MNT_SCHWAB_ORDER_SUBMISSION_ENABLED must remain false in Phase 1; no order-placement routes are exposed."
+            ),
+        )
 
     signal_enabled = _enabled(env.get("MNT_SIGNAL_DB_ENABLED"), True)
     add(
@@ -155,7 +166,7 @@ def storage_checks(env: Mapping[str, str] | None = None) -> list[dict[str, Any]]
     return output
 
 
-async def endpoint_checks(base_url: str | None = None, *, schwab_required: bool = False) -> list[dict[str, Any]]:
+async def endpoint_checks(base_url: str | None = None, *, schwab_enabled: bool = False) -> list[dict[str, Any]]:
     base_url = (base_url or os.getenv("MNT_DASHBOARD_API_URL", "http://127.0.0.1:8080")).rstrip("/")
     checks = [
         ("dashboard_health", "GET", "/api/health", None, True),
@@ -163,8 +174,11 @@ async def endpoint_checks(base_url: str | None = None, *, schwab_required: bool 
         ("market_radar", "GET", "/api/radar", {"limit": 3}, True),
         ("signal_history_api", "GET", "/api/kronos/signals", {"limit": 1}, False),
     ]
-    if schwab_required:
-        checks.append(("schwab_authorization", "GET", "/api/schwab/status", None, True))
+    if schwab_enabled:
+        # OAuth authorization is intentionally a warning rather than a deployment
+        # blocker. The dashboard must deploy first so the user can reach /broker
+        # and complete the interactive Schwab authorization flow.
+        checks.append(("schwab_authorization", "GET", "/api/schwab/status", None, False))
 
     results = []
     async with httpx.AsyncClient(timeout=12.0) as client:
@@ -192,7 +206,7 @@ async def endpoint_checks(base_url: str | None = None, *, schwab_required: bool 
                         if ok:
                             detail += "; Schwab OAuth refresh token is valid"
                         else:
-                            detail += "; interactive Schwab authorization is still required"
+                            detail += "; interactive Schwab authorization is still required at /broker"
                     except Exception:
                         ok = False
                         detail += "; invalid JSON response"
@@ -225,9 +239,9 @@ def summarize(checks: list[dict[str, Any]]) -> dict[str, Any]:
 async def run() -> dict[str, Any]:
     env = effective_environment()
     base_url = str(env.get("MNT_DASHBOARD_API_URL", "http://127.0.0.1:8080"))
-    schwab_required = _enabled(env.get("MNT_SCHWAB_ENABLED"), False)
+    schwab_enabled = _enabled(env.get("MNT_SCHWAB_ENABLED"), False)
     checks = configuration_checks(env) + storage_checks(env)
-    checks.extend(await endpoint_checks(base_url, schwab_required=schwab_required))
+    checks.extend(await endpoint_checks(base_url, schwab_enabled=schwab_enabled))
     return summarize(checks)
 
 
