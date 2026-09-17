@@ -22,12 +22,16 @@ def test_learning_lab_reads_only_browser_safe_runtime_snapshot():
     assert "MNT_DISCORD_WEBHOOK_URL" not in script
 
 
-def test_learning_lab_surfaces_shadow_option_horizons_and_risk_state():
+def test_learning_lab_surfaces_shadow_option_horizons_risk_and_learning_policy():
     script = SCRIPT.read_text(encoding="utf-8")
     for horizon in (15, 30, 60, 120):
         assert str(horizon) in script
     assert "option_contract_returns" in script
     assert "session_risk" in script
+    assert "weight_challenge" in script
+    assert "daily_scorecard" in script
+    assert "KEEP CURRENT" in script
+    assert "Today's quality" in script
     assert "shadow" in script.lower()
 
 
