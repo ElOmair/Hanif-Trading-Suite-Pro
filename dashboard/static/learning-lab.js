@@ -63,6 +63,29 @@
     };
   }
 
+  function challengeText(challenge) {
+    const status = String(challenge?.status || "COLLECTING").toUpperCase();
+    const improvement = number(challenge?.holdout_improvement_pct_points);
+    const baseline = number(challenge?.baseline_holdout?.win_rate_pct);
+    const candidate = number(challenge?.candidate_holdout?.win_rate_pct);
+    if (status === "CANDIDATE_VALIDATED" && challenge?.recommend_candidate) {
+      return {
+        value: `${pct(baseline)} → ${pct(candidate)}`,
+        note: `Later holdout improved ${signedPct(improvement)} points. Candidate weights remain shadow-only.`,
+      };
+    }
+    if (status === "KEEP_CURRENT") {
+      return {
+        value: "KEEP CURRENT",
+        note: safeText(challenge?.reason, "The candidate did not beat the current weights on later holdout signals."),
+      };
+    }
+    return {
+      value: "COLLECTING",
+      note: safeText(challenge?.reason, "More resolved chronological signals are needed before challenging Fusion weights."),
+    };
+  }
+
   function renderHorizon(horizon, raw) {
     const row = raw || {};
     const count = Number(row.count || 0);
@@ -89,9 +112,11 @@
     const ready = learning.ready_alerts || {};
     const options = learning.option_contract_returns || {};
     const policy = learning.threshold_policy || {};
+    const challenge = learning.weight_challenge || {};
     const risk = worker.session_risk || {};
     const badge = workerBadge(worker);
     const threshold = thresholdText(policy);
+    const challenger = challengeText(challenge);
     const horizons = options.horizons || {};
 
     const optionMarks = Number(options.marks_total || 0);
@@ -105,7 +130,7 @@
         <div>
           <div class="eyebrow">SHADOW EVIDENCE</div>
           <h2>MnT Learning Lab</h2>
-          <p class="muted">What MnT is actually learning from its own signals, READY alerts, and option contracts. These are shadow results, not promises of future performance.</p>
+          <p class="muted">What MnT is actually learning from its own signals, READY alerts, option contracts, and later unseen validation. These are shadow results, not promises of future performance.</p>
         </div>
         <div id="mntLearningState" class="mnt-learning-state ${badge.cls}">${badge.label}</div>
       </div>
@@ -125,6 +150,11 @@
           <span>Review score gate</span>
           <strong>${threshold.value}</strong>
           <small>${threshold.note}</small>
+        </div>
+        <div class="mnt-learning-card">
+          <span>Weight challenger</span>
+          <strong>${challenger.value}</strong>
+          <small>${challenger.note}</small>
         </div>
         <div class="mnt-learning-card">
           <span>Option marks captured</span>
@@ -153,6 +183,7 @@
         <summary>Technical learning details</summary>
         <pre>${JSON.stringify({
           threshold_policy: policy,
+          weight_challenge: challenge,
           layer_effectiveness: learning.layer_effectiveness || {},
           worker: worker,
           option_contract_returns: options,
