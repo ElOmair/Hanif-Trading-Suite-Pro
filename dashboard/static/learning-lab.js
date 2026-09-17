@@ -39,8 +39,8 @@
     const state = String(worker?.worker_state || "UNKNOWN").toUpperCase();
     const age = minutesAgo(worker?.heartbeat_at);
     if (age !== null && age > 5) return { label: `STALE ${Math.round(age)}m`, cls: "alert" };
-    if (["HEALTHY", "IDLE", "MARKET_CLOSED"].includes(state)) return { label: state, cls: "healthy" };
-    if (["DEGRADED", "CAUTION"].includes(state)) return { label: state, cls: "caution" };
+    if (["HEALTHY", "IDLE", "MARKET_CLOSED", "OFF_HOURS", "RISK_PAUSED"].includes(state)) return { label: state, cls: "healthy" };
+    if (["DEGRADED", "PARTIAL", "CAUTION"].includes(state)) return { label: state, cls: "caution" };
     if (["ERROR", "FAILED", "STALE"].includes(state)) return { label: state, cls: "alert" };
     return { label: state, cls: "caution" };
   }
@@ -52,10 +52,7 @@
     const minimum = integer(policy?.minimum_samples_required);
     if (current === null) return { value: "—", note: "No live threshold data yet." };
     if (recommended === null || recommended <= current) {
-      return {
-        value: `${current.toFixed(0)}`,
-        note: `${resolved}/${minimum} resolved samples. No stricter threshold recommended yet.`,
-      };
+      return { value: `${current.toFixed(0)}`, note: `${resolved}/${minimum} resolved samples. No stricter threshold recommended yet.` };
     }
     return {
       value: `${current.toFixed(0)} → ${recommended.toFixed(0)}`,
@@ -69,21 +66,12 @@
     const baseline = number(challenge?.baseline_holdout?.win_rate_pct);
     const candidate = number(challenge?.candidate_holdout?.win_rate_pct);
     if (status === "CANDIDATE_VALIDATED" && challenge?.recommend_candidate) {
-      return {
-        value: `${pct(baseline)} → ${pct(candidate)}`,
-        note: `Later holdout improved ${signedPct(improvement)} points. Candidate weights remain shadow-only.`,
-      };
+      return { value: `${pct(baseline)} → ${pct(candidate)}`, note: `Later holdout improved ${signedPct(improvement)} points. Candidate weights remain shadow-only.` };
     }
     if (status === "KEEP_CURRENT") {
-      return {
-        value: "KEEP CURRENT",
-        note: safeText(challenge?.reason, "The candidate did not beat the current weights on later holdout signals."),
-      };
+      return { value: "KEEP CURRENT", note: safeText(challenge?.reason, "The candidate did not beat the current weights on later holdout signals.") };
     }
-    return {
-      value: "COLLECTING",
-      note: safeText(challenge?.reason, "More resolved chronological signals are needed before challenging Fusion weights."),
-    };
+    return { value: "COLLECTING", note: safeText(challenge?.reason, "More resolved chronological signals are needed before challenging Fusion weights.") };
   }
 
   function renderHorizon(horizon, raw) {
@@ -126,6 +114,10 @@
     const riskBlocked = Boolean(risk.entry_review_blocked);
     const scanShortlist = (worker.radar?.shortlist || []).join(", ") || "none yet";
     const dayMarks = scorecard.option_marks || {};
+    const evidence = scorecard.option_evidence || {};
+    const evidenceLabel = evidence.eligible_trades === undefined
+      ? "evidence coverage pending"
+      : `${integer(evidence.measured_trades)}/${integer(evidence.eligible_trades)} eligible measured${evidence.complete === false ? " · PARTIAL" : ""}`;
 
     shell.innerHTML = `
       <div class="mnt-learning-head">
@@ -141,7 +133,7 @@
         <div class="mnt-learning-card">
           <span>Today's quality</span>
           <strong>${safeText(scorecard.quality_state, "COLLECTING")}</strong>
-          <small>${integer(scorecard.ready_ideas)} READY ideas · ${integer(dayMarks.count)} measured ${integer(scorecard.option_horizon_minutes)}m option marks · avg ${signedPct(dayMarks.average_return_pct)}.</small>
+          <small>${integer(scorecard.ready_ideas)} READY ideas · ${integer(dayMarks.count)} measured ${integer(scorecard.option_horizon_minutes)}m marks · avg ${signedPct(dayMarks.average_return_pct)} · ${evidenceLabel}.</small>
         </div>
         <div class="mnt-learning-card">
           <span>Signal outcomes</span>
@@ -173,9 +165,7 @@
       <div class="mnt-option-performance">
         <h3>Actual option-contract shadow returns</h3>
         <p>Conservative measurement: MnT assumes entry at the surfaced ask and values the later contract at the bid, so spread friction is included.</p>
-        <div class="mnt-horizon-grid">
-          ${[15, 30, 60, 120].map((h) => renderHorizon(h, horizons[String(h)])).join("")}
-        </div>
+        <div class="mnt-horizon-grid">${[15, 30, 60, 120].map((h) => renderHorizon(h, horizons[String(h)])).join("")}</div>
       </div>
 
       <div class="mnt-learning-risk">
@@ -189,14 +179,7 @@
 
       <details class="mnt-learning-details">
         <summary>Technical learning details</summary>
-        <pre>${JSON.stringify({
-          daily_scorecard: scorecard,
-          threshold_policy: policy,
-          weight_challenge: challenge,
-          layer_effectiveness: learning.layer_effectiveness || {},
-          worker: worker,
-          option_contract_returns: options,
-        }, null, 2)}</pre>
+        <pre>${JSON.stringify({ daily_scorecard: scorecard, threshold_policy: policy, weight_challenge: challenge, layer_effectiveness: learning.layer_effectiveness || {}, worker: worker, option_contract_returns: options }, null, 2)}</pre>
       </details>
     `;
   }
@@ -204,11 +187,7 @@
   function renderError(message) {
     const shell = document.getElementById("mntLearningLab");
     if (!shell) return;
-    shell.innerHTML = `
-      <div class="mnt-learning-head">
-        <div><div class="eyebrow">SHADOW EVIDENCE</div><h2>MnT Learning Lab</h2><p class="muted">${safeText(message, "Learning snapshot unavailable.")}</p></div>
-        <div class="mnt-learning-state caution">WAITING</div>
-      </div>`;
+    shell.innerHTML = `<div class="mnt-learning-head"><div><div class="eyebrow">SHADOW EVIDENCE</div><h2>MnT Learning Lab</h2><p class="muted">${safeText(message, "Learning snapshot unavailable.")}</p></div><div class="mnt-learning-state caution">WAITING</div></div>`;
   }
 
   async function refresh() {
