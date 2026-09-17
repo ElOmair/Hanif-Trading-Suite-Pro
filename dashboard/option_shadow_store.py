@@ -38,6 +38,17 @@ def _parse_time(value: Any) -> datetime | None:
         return None
 
 
+def _ensure_columns(connection: sqlite3.Connection) -> None:
+    existing = {str(row["name"]) for row in connection.execute("PRAGMA table_info(mnt_option_shadow_marks)").fetchall()}
+    additions = {
+        "quote_age_minutes": "REAL",
+        "quote_horizon_error_minutes": "REAL",
+    }
+    for name, column_type in additions.items():
+        if name not in existing:
+            connection.execute(f"ALTER TABLE mnt_option_shadow_marks ADD COLUMN {name} {column_type}")
+
+
 def _connect() -> sqlite3.Connection:
     path = _db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -62,10 +73,13 @@ def _connect() -> sqlite3.Connection:
             return_mid_vs_entry_ask_pct REAL,
             quote_timestamp TEXT,
             feed TEXT,
+            quote_age_minutes REAL,
+            quote_horizon_error_minutes REAL,
             UNIQUE(shadow_trade_id, horizon_minutes)
         )
         """
     )
+    _ensure_columns(connection)
     connection.commit()
     return connection
 
@@ -111,9 +125,9 @@ def due_option_marks(
 ) -> list[dict[str, Any]]:
     """Return same-session shadow trades whose horizon mark is now due.
 
-    A missed horizon is still eligible later in the same session. The stored
-    `lag_minutes` makes delayed observations explicit so analysis can exclude
-    them instead of pretending they were collected exactly on time.
+    A missed horizon is still eligible later in the same session. Both collector
+    lag and the source quote timestamp are stored so later analysis can reject
+    stale marks instead of pretending they were observed exactly on time.
     """
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     now_et = now.astimezone(ET)
@@ -150,6 +164,7 @@ def due_option_marks(
                     "symbol": trade.get("symbol"),
                     "option_symbol": option_symbol,
                     "entry_ask": entry_ask,
+                    "created_at": created.isoformat(),
                     "horizon_minutes": horizon,
                     "actual_age_minutes": round(age_minutes, 2),
                     "lag_minutes": round(max(0.0, age_minutes - horizon), 2),
@@ -176,12 +191,20 @@ def record_option_mark(
     conservative_return = ((bid / entry_ask) - 1.0) * 100.0 if bid is not None and bid >= 0 else None
     midpoint_return = ((mid / entry_ask) - 1.0) * 100.0 if mid is not None else None
     quote_timestamp = quote.get("timestamp") or quote.get("t")
+    quote_time = _parse_time(quote_timestamp)
+    created = _parse_time(due.get("created_at"))
+    horizon = int(due["horizon_minutes"])
+    quote_age = None
+    quote_horizon_error = None
+    if quote_time is not None and created is not None:
+        quote_age = (quote_time - created).total_seconds() / 60.0
+        quote_horizon_error = abs(quote_age - float(horizon))
 
     values = (
         int(due["shadow_trade_id"]),
         int(due["signal_id"]) if due.get("signal_id") is not None else None,
         str(due["option_symbol"]),
-        int(due["horizon_minutes"]),
+        horizon,
         marked_at.isoformat(),
         float(due["actual_age_minutes"]),
         float(due["lag_minutes"]),
@@ -193,6 +216,8 @@ def record_option_mark(
         midpoint_return,
         str(quote_timestamp) if quote_timestamp is not None else None,
         feed,
+        round(quote_age, 3) if quote_age is not None else None,
+        round(quote_horizon_error, 3) if quote_horizon_error is not None else None,
     )
     with _connect() as connection:
         connection.execute(
@@ -201,18 +226,26 @@ def record_option_mark(
                 shadow_trade_id, signal_id, option_symbol, horizon_minutes,
                 marked_at, actual_age_minutes, lag_minutes, entry_ask,
                 exit_bid, exit_ask, exit_mid, return_bid_vs_entry_ask_pct,
-                return_mid_vs_entry_ask_pct, quote_timestamp, feed
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                return_mid_vs_entry_ask_pct, quote_timestamp, feed,
+                quote_age_minutes, quote_horizon_error_minutes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(shadow_trade_id, horizon_minutes) DO NOTHING
             """,
             values,
         )
         row = connection.execute(
             "SELECT id FROM mnt_option_shadow_marks WHERE shadow_trade_id = ? AND horizon_minutes = ?",
-            (int(due["shadow_trade_id"]), int(due["horizon_minutes"])),
+            (int(due["shadow_trade_id"]), horizon),
         ).fetchone()
         connection.commit()
         return int(row["id"]) if row else None
+
+
+def mark_timing_error_minutes(row: dict[str, Any]) -> float | None:
+    quote_error = _number(row.get("quote_horizon_error_minutes"))
+    if quote_error is not None:
+        return quote_error
+    return _number(row.get("lag_minutes"))
 
 
 def option_mark_summary(
@@ -228,8 +261,8 @@ def option_mark_summary(
             row
             for row in marks
             if int(row.get("horizon_minutes") or 0) == horizon
-            and _number(row.get("lag_minutes")) is not None
-            and float(row["lag_minutes"]) <= float(max_lag_minutes)
+            and mark_timing_error_minutes(row) is not None
+            and float(mark_timing_error_minutes(row)) <= float(max_lag_minutes)
             and _number(row.get("return_bid_vs_entry_ask_pct")) is not None
         ]
         returns = [float(row["return_bid_vs_entry_ask_pct"]) for row in eligible]
@@ -253,6 +286,7 @@ def option_mark_summary(
         "marks_total": len(marks),
         "max_lag_minutes_in_summary": float(max_lag_minutes),
         "return_convention": "entry at surfaced ask; later mark at bid",
+        "timing_convention": "prefer source quote timestamp distance from requested horizon; fall back to collector lag for legacy marks",
         "horizons": horizons,
         "note": "Shadow quote returns include bid/ask friction and do not represent an executed brokerage fill.",
     }
