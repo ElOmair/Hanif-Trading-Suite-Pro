@@ -18,6 +18,22 @@ def base_payload():
     }
 
 
+def sample_chain():
+    return {"callExpDateMap": {"2026-10-16:29": {"500.0": [{
+        "symbol": "SPY  261016C00500000",
+        "putCall": "CALL",
+        "strikePrice": 500.0,
+        "expirationDate": "2026-10-16T20:00:00.000+00:00",
+        "daysToExpiration": 29,
+        "bid": 2.20,
+        "ask": 2.30,
+        "delta": 0.50,
+        "volatility": 22.0,
+        "totalVolume": 1200,
+        "openInterest": 5000,
+    }]}}}
+
+
 def test_disconnected_schwab_keeps_existing_options(monkeypatch):
     monkeypatch.setattr(decision_api, "token_status", lambda: {"configured": False, "authorized": False, "refresh_token_valid": False})
     result = asyncio.run(decision_api._schwab_overlay(base_payload(), max_contract_cost=300))
@@ -40,8 +56,32 @@ def test_portfolio_gate_blocks_high_concentration():
     assert gate["allow_add"] is False
 
 
-def test_connected_schwab_becomes_preferred_contract_source(monkeypatch):
+def test_market_data_only_schwab_still_becomes_preferred_contract_source(monkeypatch):
     monkeypatch.setattr(decision_api, "token_status", lambda: {"configured": True, "authorized": True, "refresh_token_valid": True})
+    monkeypatch.setattr(decision_api, "accounts_enabled", lambda: False)
+
+    async def should_not_request_positions():
+        raise AssertionError("positions must not be requested in analysis-only mode")
+
+    async def fake_chain(symbol, **kwargs):
+        return sample_chain()
+
+    monkeypatch.setattr(decision_api, "positions", should_not_request_positions)
+    monkeypatch.setattr(decision_api, "option_chain", fake_chain)
+    result = asyncio.run(decision_api._schwab_overlay(base_payload(), max_contract_cost=300))
+    assert result["available"] is True
+    assert result["market_data_available"] is True
+    assert result["accounts_available"] is False
+    assert result["analysis_mode"] == "MARKET_DATA_ONLY"
+    assert result["portfolio_gate"]["state"] == "NOT_IN_USE"
+    assert result["preferred_contract_provider"] == "schwab"
+    assert result["preferred_options"]
+    assert result["broker_adjusted_fusion_score"] is not None
+
+
+def test_connected_schwab_with_accounts_adds_portfolio_gate(monkeypatch):
+    monkeypatch.setattr(decision_api, "token_status", lambda: {"configured": True, "authorized": True, "refresh_token_valid": True})
+    monkeypatch.setattr(decision_api, "accounts_enabled", lambda: True)
 
     async def fake_positions():
         return {
@@ -55,24 +95,12 @@ def test_connected_schwab_becomes_preferred_contract_source(monkeypatch):
         }
 
     async def fake_chain(symbol, **kwargs):
-        return {"callExpDateMap": {"2026-10-16:29": {"500.0": [{
-            "symbol": "SPY  261016C00500000",
-            "putCall": "CALL",
-            "strikePrice": 500.0,
-            "expirationDate": "2026-10-16T20:00:00.000+00:00",
-            "daysToExpiration": 29,
-            "bid": 2.20,
-            "ask": 2.30,
-            "delta": 0.50,
-            "volatility": 22.0,
-            "totalVolume": 1200,
-            "openInterest": 5000,
-        }]}}}
+        return sample_chain()
 
     monkeypatch.setattr(decision_api, "positions", fake_positions)
     monkeypatch.setattr(decision_api, "option_chain", fake_chain)
     result = asyncio.run(decision_api._schwab_overlay(base_payload(), max_contract_cost=300))
-    assert result["available"] is True
+    assert result["accounts_available"] is True
     assert result["portfolio_gate"]["state"] == "OK_NEW"
     assert result["preferred_contract_provider"] == "schwab"
     assert result["preferred_options"]
