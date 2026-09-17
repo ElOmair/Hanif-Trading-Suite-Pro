@@ -1,3 +1,4 @@
+import schwab_api
 from app_schwab import app
 
 
@@ -17,3 +18,15 @@ def test_no_schwab_order_route_is_exposed_yet():
     paths = {route.path for route in app.routes}
     assert not any(path.startswith("/api/schwab/orders") for path in paths)
     assert not any(path.startswith("/api/schwab/order") for path in paths)
+
+
+def test_phase1_status_forces_order_submission_disabled(monkeypatch):
+    monkeypatch.setattr(
+        schwab_api,
+        "token_status",
+        lambda: {"configured": True, "authorized": True, "order_submission_enabled": True},
+    )
+    payload = schwab_api.status()
+    assert payload["order_submission_enabled"] is False
+    assert payload["phase"] == "READ_ONLY_PHASE_1"
+    assert payload["research_only"] is True
