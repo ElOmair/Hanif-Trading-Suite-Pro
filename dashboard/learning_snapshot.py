@@ -34,6 +34,31 @@ def _public_worker_status(status: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _aggregate_signal_calibration(summary: dict[str, Any]) -> dict[str, Any]:
+    buckets = summary.get("score_buckets") or {}
+    wins = losses = ambiguous = unresolved = 0
+    for raw in buckets.values():
+        bucket = raw or {}
+        wins += int(bucket.get("wins") or 0)
+        losses += int(bucket.get("losses") or 0)
+        ambiguous += int(bucket.get("ambiguous") or 0)
+        unresolved += int(bucket.get("unresolved") or 0)
+    resolved = wins + losses
+    evaluated = int(summary.get("evaluated_count") or 0)
+    total = int(summary.get("total_count") or 0)
+    return {
+        "total": total,
+        "evaluated": evaluated,
+        "resolved": resolved,
+        "wins": wins,
+        "losses": losses,
+        "ambiguous": ambiguous,
+        "unresolved": unresolved,
+        "pending": max(0, total - evaluated),
+        "target_first_win_rate_pct": round(100.0 * wins / resolved, 1) if resolved else None,
+    }
+
+
 def build_learning_snapshot(worker_status: dict[str, Any] | None = None) -> dict[str, Any]:
     """Build browser-safe learning metrics.
 
@@ -47,30 +72,27 @@ def build_learning_snapshot(worker_status: dict[str, Any] | None = None) -> dict
     options = report.get("option_contract_shadow_returns") or {}
     policy = report.get("policy") or {}
     layers = report.get("layer_effectiveness") or {}
+    current = policy.get("current") or {}
+    recommended = policy.get("recommended") or {}
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": "shadow/research",
         "worker": _public_worker_status(worker_status),
         "learning": {
-            "signal_calibration": {
-                "total": summary.get("total"),
-                "resolved": summary.get("resolved"),
-                "wins": summary.get("wins"),
-                "losses": summary.get("losses"),
-                "ambiguous": summary.get("ambiguous"),
-                "pending": summary.get("pending"),
-                "target_first_win_rate_pct": summary.get("target_first_win_rate_pct"),
-            },
+            "signal_calibration": _aggregate_signal_calibration(summary),
             "ready_alerts": shadow,
             "option_contract_returns": options,
             "threshold_policy": {
                 "status": policy.get("status"),
-                "current_min_score": policy.get("current_min_score"),
-                "recommended_min_score": policy.get("recommended_min_score"),
-                "resolved_samples": policy.get("resolved_samples"),
-                "minimum_samples_required": policy.get("minimum_samples_required"),
+                "current_min_score": current.get("min_score"),
+                "current_min_coverage_pct": current.get("min_coverage_pct"),
+                "recommended_min_score": recommended.get("min_score"),
+                "recommended_min_coverage_pct": recommended.get("min_coverage_pct"),
+                "resolved_samples": policy.get("resolved_count"),
+                "minimum_samples_required": policy.get("minimum_resolved_samples"),
                 "target_win_rate_pct": policy.get("target_win_rate_pct"),
+                "score_delta": policy.get("score_delta"),
                 "reason": policy.get("reason"),
             },
             "layer_effectiveness": layers,
