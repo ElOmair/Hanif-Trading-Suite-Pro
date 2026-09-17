@@ -4,9 +4,18 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>MnT Broker Desk</title>
-  <link rel="stylesheet" href="/static/broker.css">
+  <link rel="stylesheet" href="/static/broker.css?v=20260917-0230">
+  <link rel="stylesheet" href="/static/unified-shell.css?v=20260917-0230">
 </head>
-<body>
+<body id="top">
+  <nav class="mnt-nav" aria-label="MnT sections">
+    <a href="/">Home</a>
+    <a href="/#trades">Trades</a>
+    <a href="/#mntOpportunityShell">Invest / Holds</a>
+    <a class="active broker-link" href="/broker">Portfolio / Broker</a>
+    <a href="/#mntLearningLab">Learning</a>
+  </nav>
+
   <main class="shell">
     <header>
       <div>
@@ -59,6 +68,6 @@
       <div id="candidates" class="table-wrap"></div>
     </section>
   </main>
-  <script src="/static/broker.js"></script>
+  <script src="/static/broker.js?v=20260917-0230"></script>
 </body>
 </html>
