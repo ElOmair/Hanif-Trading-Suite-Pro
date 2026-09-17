@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -13,6 +14,18 @@ from schwab_position_manager import build_portfolio_reviews
 from schwab_provider import begin_oauth, configured, exchange_code, option_chain, positions, quotes, token_status
 
 router = APIRouter(prefix="/api/schwab", tags=["schwab"])
+
+
+def accounts_enabled() -> bool:
+    return str(os.getenv("MNT_SCHWAB_ACCOUNTS_ENABLED", "false")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _analysis_only_reason() -> str:
+    return (
+        "Schwab is intentionally running in market-data analysis mode. "
+        "Quotes, fundamentals, option chains, and ranked contracts are enabled; "
+        "account balances and positions are disabled until MNT_SCHWAB_ACCOUNTS_ENABLED=true."
+    )
 
 
 def _http_error(exc: Exception) -> HTTPException:
@@ -41,8 +54,12 @@ def _quote_for_symbol(payload: Any, symbol: str) -> dict[str, Any]:
 @router.get("/status")
 def status() -> dict[str, Any]:
     payload = token_status()
+    account_reads = accounts_enabled()
+    payload["accounts_enabled"] = account_reads
+    payload["market_data_analysis_enabled"] = bool(payload.get("configured"))
+    payload["analysis_mode"] = "MARKET_DATA_ONLY" if not account_reads else "MARKET_DATA_PLUS_ACCOUNTS"
     payload["order_submission_enabled"] = False
-    payload["phase"] = "READ_ONLY_PHASE_1"
+    payload["phase"] = "READ_ONLY_ANALYSIS"
     payload["research_only"] = True
     return payload
 
@@ -83,6 +100,16 @@ async def callback(code: str = Query(...), state: str | None = Query(None)) -> H
 
 @router.get("/positions")
 async def account_positions() -> dict[str, Any]:
+    if not accounts_enabled():
+        return {
+            "accounts": [],
+            "account_count": 0,
+            "available": False,
+            "provider": "schwab",
+            "analysis_mode": "MARKET_DATA_ONLY",
+            "reason": _analysis_only_reason(),
+            "read_only": True,
+        }
     try:
         return await positions()
     except Exception as exc:
@@ -95,6 +122,16 @@ async def portfolio_review() -> dict[str, Any]:
 
     This is research-only position management guidance and never submits orders.
     """
+    if not accounts_enabled():
+        return {
+            "reviews": [],
+            "review_count": 0,
+            "attention_count": 0,
+            "available": False,
+            "analysis_mode": "MARKET_DATA_ONLY",
+            "reason": _analysis_only_reason(),
+            "research_only": True,
+        }
     try:
         payload = await positions()
         symbols: set[str] = set()
@@ -125,11 +162,33 @@ async def portfolio_context(
     symbol: str,
     direction: str | None = Query(None, pattern="^(LONG|SHORT)$"),
 ) -> dict[str, Any]:
+    target = symbol.strip().upper()
+    if not accounts_enabled():
+        return {
+            "symbol": target,
+            "intended_direction": direction,
+            "relationship": "UNKNOWN",
+            "exposure_state": "UNAVAILABLE",
+            "existing_position_count": None,
+            "existing_market_value": None,
+            "portfolio_liquidation_value": None,
+            "buying_power": None,
+            "concentration_pct": None,
+            "risk_level": "UNKNOWN",
+            "positions": [],
+            "action_note": "Portfolio context is intentionally disabled while Schwab is being used for analysis only.",
+            "available": False,
+            "analysis_mode": "MARKET_DATA_ONLY",
+            "provider": "schwab",
+            "research_only": True,
+            "read_only": True,
+        }
     try:
         payload = await positions()
-        context = build_symbol_context(payload, symbol, intended_direction=direction)
+        context = build_symbol_context(payload, target, intended_direction=direction)
         context["provider"] = "schwab"
         context["research_only"] = True
+        context["available"] = True
         return context
     except Exception as exc:
         raise _http_error(exc) from exc
@@ -194,6 +253,7 @@ async def option_candidates(
             "style": style,
             "max_contract_cost": max_contract_cost,
             "provider": "schwab",
+            "analysis_mode": "MARKET_DATA_ONLY" if not accounts_enabled() else "MARKET_DATA_PLUS_ACCOUNTS",
             "candidates": candidates,
             "candidate_count": len(candidates),
             "research_only": True,
