@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from schwab_contracts import rank_option_candidates
+from schwab_fundamentals import score_equity_quote
 from schwab_portfolio import build_symbol_context
 from schwab_provider import begin_oauth, configured, exchange_code, option_chain, positions, quotes, token_status
 
@@ -20,11 +21,24 @@ def _http_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=status, detail=f"Schwab API: {type(exc).__name__}: {text}")
 
 
+def _quote_for_symbol(payload: Any, symbol: str) -> dict[str, Any]:
+    target = symbol.strip().upper()
+    if isinstance(payload, dict):
+        direct = payload.get(target) or payload.get(symbol) or payload.get(symbol.lower())
+        if isinstance(direct, dict):
+            return direct
+        if str(payload.get("symbol") or "").upper() == target:
+            return payload
+    if isinstance(payload, list):
+        for row in payload:
+            if isinstance(row, dict) and str(row.get("symbol") or "").upper() == target:
+                return row
+    return {}
+
+
 @router.get("/status")
 def status() -> dict[str, Any]:
     payload = token_status()
-    # Phase 1 is deliberately read-only. Even if an environment value is changed,
-    # the public API must not imply that brokerage execution is available.
     payload["order_submission_enabled"] = False
     payload["phase"] = "READ_ONLY_PHASE_1"
     payload["research_only"] = True
@@ -78,13 +92,27 @@ async def portfolio_context(
     symbol: str,
     direction: str | None = Query(None, pattern="^(LONG|SHORT)$"),
 ) -> dict[str, Any]:
-    """Return browser-safe position awareness for one underlying symbol."""
     try:
         payload = await positions()
         context = build_symbol_context(payload, symbol, intended_direction=direction)
         context["provider"] = "schwab"
         context["research_only"] = True
         return context
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get("/fundamentals/{symbol}")
+async def fundamental_snapshot(symbol: str) -> dict[str, Any]:
+    """Return a screening-grade equity fundamental snapshot from Schwab quote data."""
+    target = symbol.strip().upper()
+    try:
+        raw = await quotes([target])
+        quote = _quote_for_symbol(raw, target)
+        snapshot = score_equity_quote(target, quote)
+        snapshot["provider"] = "schwab"
+        snapshot["research_only"] = True
+        return snapshot
     except Exception as exc:
         raise _http_error(exc) from exc
 
