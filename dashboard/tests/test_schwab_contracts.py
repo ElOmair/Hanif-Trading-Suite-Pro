@@ -78,6 +78,7 @@ def test_swing_rank_prefers_liquid_delta_aligned_contract():
     assert candidates[0]["provider"] == "schwab"
     assert candidates[0]["estimated_cost"] == 250.0
     assert candidates[0]["expiration"] == "2026-10-16"
+    assert candidates[0]["style_match"] is True
 
 
 def test_max_contract_cost_is_hard_filter():
@@ -102,3 +103,64 @@ def test_short_uses_puts():
     )
     assert len(candidates) == 1
     assert candidates[0]["contract_type"] == "PUT"
+
+
+def test_swing_excludes_0dte_even_when_liquidity_is_exceptional():
+    chain = _chain()
+    chain["callExpDateMap"]["2026-09-17:0"] = {
+        "761.0": [{
+            "symbol": "SPY  260917C00761000",
+            "putCall": "CALL",
+            "strikePrice": 761.0,
+            "bid": 1.38,
+            "ask": 1.39,
+            "delta": 0.523,
+            "totalVolume": 51622,
+            "openInterest": 6051,
+            "daysToExpiration": 0,
+            "volatility": 15.94,
+        }]
+    }
+    candidates = rank_option_candidates(chain, direction="LONG", max_contract_cost=300, style="swing", limit=5)
+    symbols = {row["symbol"] for row in candidates}
+    assert "SPY  260917C00761000" not in symbols
+    assert "SPY  261016C00760000" in symbols
+
+
+def test_swing_rejects_very_low_delta_budget_contract():
+    chain = _chain()
+    chain["callExpDateMap"]["2026-10-16:29"]["781.0"] = [{
+        "symbol": "SPY  261016C00781000",
+        "putCall": "CALL",
+        "strikePrice": 781.0,
+        "bid": 2.84,
+        "ask": 2.87,
+        "delta": 0.205,
+        "totalVolume": 513,
+        "openInterest": 3024,
+        "daysToExpiration": 29,
+        "volatility": 11.74,
+    }]
+    candidates = rank_option_candidates(chain, direction="LONG", max_contract_cost=300, style="swing", limit=5)
+    symbols = {row["symbol"] for row in candidates}
+    assert "SPY  261016C00781000" not in symbols
+
+
+def test_intraday_can_use_same_day_contracts():
+    chain = _chain()
+    chain["callExpDateMap"]["2026-09-17:0"] = {
+        "761.0": [{
+            "symbol": "SPY  260917C00761000",
+            "putCall": "CALL",
+            "strikePrice": 761.0,
+            "bid": 1.38,
+            "ask": 1.39,
+            "delta": 0.523,
+            "totalVolume": 51622,
+            "openInterest": 6051,
+            "daysToExpiration": 0,
+            "volatility": 15.94,
+        }]
+    }
+    candidates = rank_option_candidates(chain, direction="LONG", max_contract_cost=300, style="intraday", limit=5)
+    assert any(row["symbol"] == "SPY  260917C00761000" for row in candidates)
