@@ -9,6 +9,45 @@ from typing import Any, Mapping
 import httpx
 
 ROOT = Path(__file__).resolve().parent
+DEFAULT_KRONOS_ENV = Path("/home/airomair/Kronos/.env")
+DEFAULT_MNT_ENV = ROOT / "mnt.env"
+
+
+def read_env_file(path: Path) -> dict[str, str]:
+    """Parse simple systemd-style KEY=VALUE data without executing it as shell code."""
+    values: dict[str, str] = {}
+    if not path.exists():
+        return values
+    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key or not all(ch.isalnum() or ch == "_" for ch in key):
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        values[key] = value
+    return values
+
+
+def effective_environment(
+    process_env: Mapping[str, str] | None = None,
+    *,
+    kronos_env_path: Path = DEFAULT_KRONOS_ENV,
+    mnt_env_path: Path = DEFAULT_MNT_ENV,
+) -> dict[str, str]:
+    """Mirror systemd EnvironmentFile precedence for CLI preflight checks."""
+    merged = dict(process_env or os.environ)
+    merged.update(read_env_file(kronos_env_path))
+    merged.update(read_env_file(mnt_env_path))
+    return merged
 
 
 def configuration_checks(env: Mapping[str, str] | None = None) -> list[dict[str, Any]]:
@@ -70,6 +109,7 @@ def storage_checks(env: Mapping[str, str] | None = None) -> list[dict[str, Any]]
         "signal_db": Path(str(env.get("MNT_SIGNAL_DB", ROOT / "data" / "mnt_signals.sqlite3"))).expanduser(),
         "shadow_db": Path(str(env.get("MNT_SHADOW_TRADE_DB", ROOT / "data" / "mnt_shadow_trades.sqlite3"))).expanduser(),
         "alert_state": Path(str(env.get("MNT_ALERT_STATE_FILE", ROOT / "data" / "mnt_alert_state.json"))).expanduser(),
+        "worker_status": Path(str(env.get("MNT_WORKER_STATUS_FILE", ROOT / "data" / "mnt_worker_status.json"))).expanduser(),
     }
     output = []
     for name, path in targets.items():
@@ -140,8 +180,10 @@ def summarize(checks: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 async def run() -> dict[str, Any]:
-    checks = configuration_checks() + storage_checks()
-    checks.extend(await endpoint_checks())
+    env = effective_environment()
+    base_url = str(env.get("MNT_DASHBOARD_API_URL", "http://127.0.0.1:8080"))
+    checks = configuration_checks(env) + storage_checks(env)
+    checks.extend(await endpoint_checks(base_url))
     return summarize(checks)
 
 
