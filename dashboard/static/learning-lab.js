@@ -74,6 +74,22 @@
     return { value: "COLLECTING", note: safeText(challenge?.reason, "More resolved chronological signals are needed before challenging Fusion weights.") };
   }
 
+  function edgeText(edgeSlices) {
+    const supported = (edgeSlices?.best_supported_slices || []).filter((row) => String(row?.state || "").toUpperCase() === "SUPPORTED");
+    if (!supported.length) {
+      return {
+        value: "NO CLEAR SLICE",
+        note: `${integer(edgeSlices?.resolved)} resolved signals. A slice needs at least ${integer(edgeSlices?.minimum_samples_per_slice)} observations and meaningful lift before MnT calls it supported.`,
+      };
+    }
+    const row = supported[0];
+    const dimension = String(row.dimension || "slice").replaceAll("_", " ").toUpperCase();
+    return {
+      value: `${dimension}: ${safeText(row.value)}`,
+      note: `${pct(row.win_rate_pct)} win rate · ${signedPct(row.lift_vs_all_pct_points)} pts vs all · n=${integer(row.resolved)}. Descriptive only; this does not auto-filter trades.`,
+    };
+  }
+
   function renderHorizon(horizon, raw) {
     const row = raw || {};
     const count = Number(row.count || 0);
@@ -101,11 +117,13 @@
     const options = learning.option_contract_returns || {};
     const policy = learning.threshold_policy || {};
     const challenge = learning.weight_challenge || {};
+    const edgeSlices = learning.edge_slices || {};
     const scorecard = learning.daily_scorecard || {};
     const risk = worker.session_risk || {};
     const badge = workerBadge(worker);
     const threshold = thresholdText(policy);
     const challenger = challengeText(challenge);
+    const edge = edgeText(edgeSlices);
     const horizons = options.horizons || {};
 
     const optionMarks = Number(options.marks_total || 0);
@@ -146,6 +164,11 @@
           <small>${readyResolved} resolved from ${integer(ready.shadow_trades)} ranked READY ideas.</small>
         </div>
         <div class="mnt-learning-card">
+          <span>Measured edge</span>
+          <strong>${edge.value}</strong>
+          <small>${edge.note}</small>
+        </div>
+        <div class="mnt-learning-card">
           <span>Review score gate</span>
           <strong>${threshold.value}</strong>
           <small>${threshold.note}</small>
@@ -179,7 +202,7 @@
 
       <details class="mnt-learning-details">
         <summary>Technical learning details</summary>
-        <pre>${JSON.stringify({ daily_scorecard: scorecard, threshold_policy: policy, weight_challenge: challenge, layer_effectiveness: learning.layer_effectiveness || {}, worker: worker, option_contract_returns: options }, null, 2)}</pre>
+        <pre>${JSON.stringify({ daily_scorecard: scorecard, edge_slices: edgeSlices, threshold_policy: policy, weight_challenge: challenge, layer_effectiveness: learning.layer_effectiveness || {}, worker: worker, option_contract_returns: options }, null, 2)}</pre>
       </details>
     `;
   }
