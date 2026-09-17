@@ -21,7 +21,9 @@ def _row(index: int, label: str, technical_score: float) -> dict:
 def _history(count: int = 80) -> list[dict]:
     rows = []
     for index in range(count):
-        label = "WIN" if index % 2 == 0 else "LOSS"
+        # 3 wins / 1 loss. Current weights admit both; a modest technical up-weight
+        # filters the weak technical losses while preserving 75% of the opportunity set.
+        label = "LOSS" if index % 4 == 3 else "WIN"
         rows.append(_row(index, label, 80.0 if label == "WIN" else 53.2))
     return rows
 
@@ -36,7 +38,7 @@ def test_score_with_weights_reweights_only_available_components():
 
 def test_candidate_weight_changes_are_small_and_do_not_mutate_live_weights():
     current = dict(LAYER_WEIGHTS)
-    proposal = build_candidate_weights(_history(60), current_weights=current, min_samples_per_side=10)
+    proposal = build_candidate_weights(_history(80), current_weights=current, min_samples_per_side=10)
     assert proposal["changes"]
     assert any(item["layer"] == "technical" and item["raw_weight_delta"] > 0 for item in proposal["changes"])
     assert current == LAYER_WEIGHTS
@@ -57,10 +59,24 @@ def test_walk_forward_challenger_uses_later_holdout_and_can_validate_candidate()
     assert report["training_count"] == 56
     assert report["holdout_count"] == 24
     assert report["baseline_holdout"]["selected"] == 24
-    assert report["candidate_holdout"]["selected"] == 12
+    assert report["candidate_holdout"]["selected"] == 18
     assert report["candidate_holdout"]["win_rate_pct"] == 100.0
+    assert report["minimum_candidate_selected"] == 16
     assert report["recommend_candidate"] is True
     assert report["status"] == "CANDIDATE_VALIDATED"
+
+
+def test_walk_forward_challenger_rejects_precision_gain_that_collapses_opportunities():
+    rows = []
+    for index in range(80):
+        label = "WIN" if index % 2 == 0 else "LOSS"
+        rows.append(_row(index, label, 80.0 if label == "WIN" else 53.2))
+    report = walk_forward_weight_challenge(rows, min_resolved=40, min_holdout=12, min_candidate_selected=8)
+    assert report["baseline_holdout"]["selected"] == 24
+    assert report["candidate_holdout"]["selected"] == 12
+    assert report["candidate_holdout"]["win_rate_pct"] == 100.0
+    assert report["recommend_candidate"] is False
+    assert report["status"] == "KEEP_CURRENT"
 
 
 def test_walk_forward_challenger_collects_before_minimum_sample():
