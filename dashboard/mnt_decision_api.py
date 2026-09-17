@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from kronos_api import fusion as kronos_fusion
 from mnt_engine import build_fusion_score
+from schwab_api import accounts_enabled
 from schwab_contracts import rank_option_candidates
 from schwab_portfolio import build_symbol_context
 from schwab_provider import option_chain, positions, token_status
@@ -24,11 +25,11 @@ def _decision_label(value: Any) -> str:
 
 
 def _portfolio_gate(context: dict[str, Any] | None) -> dict[str, Any]:
-    if not context:
+    if not context or context.get("available") is False:
         return {
-            "state": "UNKNOWN",
+            "state": "NOT_IN_USE",
             "allow_add": None,
-            "reason": "Broker portfolio context is not available.",
+            "reason": "Portfolio awareness is intentionally disabled while Schwab is used for market-data analysis only.",
         }
 
     relationship = str(context.get("relationship") or "UNKNOWN").upper()
@@ -73,10 +74,14 @@ async def _schwab_overlay(
 ) -> dict[str, Any]:
     status = token_status()
     connected = bool(status.get("configured") and status.get("authorized") and status.get("refresh_token_valid"))
+    account_reads = accounts_enabled()
     overlay: dict[str, Any] = {
         "available": connected,
+        "market_data_available": connected,
+        "accounts_available": connected and account_reads,
         "provider": "schwab",
-        "phase": "READ_ONLY_PHASE_1",
+        "analysis_mode": "MARKET_DATA_ONLY" if not account_reads else "MARKET_DATA_PLUS_ACCOUNTS",
+        "phase": "READ_ONLY_ANALYSIS",
         "research_only": True,
         "portfolio_context": None,
         "portfolio_gate": _portfolio_gate(None),
@@ -86,22 +91,31 @@ async def _schwab_overlay(
         "broker_adjusted_fusion_score": None,
     }
     if not connected:
-        overlay["reason"] = "Schwab/thinkorswim is not connected yet. MnT is using its existing research layers without broker context."
+        overlay["reason"] = "Schwab/thinkorswim is not connected yet. MnT is using its existing research layers without Schwab market data."
         return overlay
 
     symbol = str(payload.get("symbol") or "").strip().upper()
     technical = payload.get("technical") or {}
     direction = str(technical.get("signal") or (payload.get("fusion_score") or {}).get("direction") or "").upper()
 
-    try:
-        portfolio = await positions()
-        context = build_symbol_context(portfolio, symbol, intended_direction=direction if direction in {"LONG", "SHORT"} else None)
-        context["provider"] = "schwab"
-        context["research_only"] = True
-        overlay["portfolio_context"] = context
-        overlay["portfolio_gate"] = _portfolio_gate(context)
-    except Exception as exc:
-        overlay["portfolio_error"] = f"{type(exc).__name__}: {exc}"
+    if account_reads:
+        try:
+            portfolio = await positions()
+            context = build_symbol_context(portfolio, symbol, intended_direction=direction if direction in {"LONG", "SHORT"} else None)
+            context["provider"] = "schwab"
+            context["research_only"] = True
+            context["available"] = True
+            overlay["portfolio_context"] = context
+            overlay["portfolio_gate"] = _portfolio_gate(context)
+        except Exception as exc:
+            overlay["portfolio_error"] = f"{type(exc).__name__}: {exc}"
+    else:
+        overlay["portfolio_context"] = {
+            "available": False,
+            "relationship": "UNKNOWN",
+            "action_note": "Schwab account and position reads are intentionally disabled during analysis-only testing.",
+        }
+        overlay["portfolio_gate"] = _portfolio_gate(overlay["portfolio_context"])
 
     label = _decision_label(payload.get("decision"))
     should_scan = direction in {"LONG", "SHORT"} and not any(term in label for term in ("REJECT", "NO_DIRECTION"))
@@ -143,7 +157,7 @@ async def broker_aware_decision(
     symbol: str,
     max_contract_cost: float = Query(300.0, gt=0, le=100000),
 ) -> dict[str, Any]:
-    """Return the normal MnT Fusion result plus read-only brokerage context.
+    """Return the normal MnT Fusion result plus read-only Schwab analysis context.
 
     This endpoint never submits, replaces, or cancels a brokerage order.
     """
