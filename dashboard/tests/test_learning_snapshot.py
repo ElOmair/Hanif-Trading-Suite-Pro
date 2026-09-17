@@ -27,6 +27,20 @@ def test_learning_snapshot_only_exposes_aggregate_metrics(monkeypatch):
                 "reason": "Need more data",
             },
             "layer_effectiveness": {"technical": {"sample_count": 8}},
+            "weight_challenge": {
+                "status": "KEEP_CURRENT",
+                "resolved": 50,
+                "training_count": 35,
+                "holdout_count": 15,
+                "recommend_candidate": False,
+                "holdout_improvement_pct_points": 1.0,
+                "baseline_holdout": {"selected": 10, "win_rate_pct": 60.0},
+                "candidate_holdout": {"selected": 10, "win_rate_pct": 61.0},
+                "proposed_changes": [{"layer": "technical", "raw_weight_delta": 2.0}],
+                "current_weights": {"technical": 25.0},
+                "candidate_weights": {"technical": 27.0},
+                "reason": "Keep current",
+            },
         },
     )
     worker = {
@@ -40,6 +54,7 @@ def test_learning_snapshot_only_exposes_aggregate_metrics(monkeypatch):
     encoded = str(payload)
     calibration = payload["learning"]["signal_calibration"]
     threshold = payload["learning"]["threshold_policy"]
+    challenge = payload["learning"]["weight_challenge"]
     assert payload["mode"] == "shadow/research"
     assert calibration["resolved"] == 8
     assert calibration["wins"] == 5
@@ -47,6 +62,9 @@ def test_learning_snapshot_only_exposes_aggregate_metrics(monkeypatch):
     assert calibration["target_first_win_rate_pct"] == 62.5
     assert threshold["current_min_score"] == 62
     assert threshold["recommended_min_score"] == 62
+    assert challenge["status"] == "KEEP_CURRENT"
+    assert challenge["holdout_count"] == 15
+    assert challenge["recommend_candidate"] is False
     assert payload["learning"]["option_contract_returns"]["horizons"]["60"]["count"] == 3
     assert payload["worker"]["radar"]["shortlist"] == ["SPY", "NVDA"]
     assert "must-not-leak" not in encoded
