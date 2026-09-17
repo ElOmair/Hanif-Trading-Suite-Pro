@@ -46,18 +46,24 @@
       const status = await getJson("/api/schwab/status");
       const connected = Boolean(status.authorized && status.refresh_token_valid);
       $("connectionState").textContent = connected ? "CONNECTED" : status.configured ? "AUTH REQUIRED" : "NOT CONFIGURED";
-      $("connectionNote").textContent = status.configured ? "Schwab Trader/Market Data API" : "Add Schwab app settings to mnt.env.";
+      if (!status.configured) {
+        $("connectionNote").textContent = "Add Schwab app settings to mnt.env.";
+      } else if (connected && !status.accounts_enabled) {
+        $("connectionNote").textContent = "Market-data analysis mode · account/position reads intentionally disabled";
+      } else {
+        $("connectionNote").textContent = "Schwab Market Data + account awareness";
+      }
       $("accessState").textContent = status.access_token_valid ? "VALID" : connected ? "AUTO-REFRESH" : "—";
       $("accessExpiry").textContent = `Expires: ${dateText(status.access_expires_at)}`;
       $("refreshState").textContent = status.reauthorization_required ? "LOGIN DUE" : status.refresh_token_valid ? "VALID" : "—";
       $("refreshExpiry").textContent = `Refresh expires: ${dateText(status.refresh_expires_at)}`;
       $("orderState").textContent = "DISABLED";
       $("connectButton").classList.toggle("hidden", !status.configured || connected);
-      return connected;
+      return status;
     } catch (error) {
       $("connectionState").textContent = "ERROR";
       $("connectionNote").textContent = error.message;
-      return false;
+      return null;
     }
   }
 
@@ -75,6 +81,11 @@
   }
 
   function renderReviews(payload) {
+    if (payload.available === false) {
+      $("reviewStatus").textContent = 'Not in use';
+      $("positionReviews").innerHTML = `<div class="account"><p class="muted">${safe(payload.reason, 'Position management is disabled while Schwab is used for analysis only.')}</p></div>`;
+      return;
+    }
     const rows = payload.reviews || [];
     $("reviewStatus").textContent = rows.length
       ? `${payload.attention_count || 0} need attention · ${rows.length} positions reviewed`
@@ -119,6 +130,11 @@
   }
 
   function renderPositions(payload) {
+    if (payload.available === false) {
+      $("positionStatus").textContent = 'Analysis-only mode';
+      $("accounts").innerHTML = `<div class="account"><p class="muted">${safe(payload.reason, 'Schwab account and position access is intentionally disabled.')}</p></div>`;
+      return;
+    }
     const accounts = payload.accounts || [];
     if (!accounts.length) {
       $("accounts").innerHTML = '<div class="account"><p class="muted">No positions returned from Schwab.</p></div>';
@@ -154,12 +170,21 @@
   async function refreshPositions() {
     $("positionStatus").textContent = "Loading…";
     try {
-      const connected = await refreshStatus();
+      const status = await refreshStatus();
+      const connected = Boolean(status?.authorized && status?.refresh_token_valid);
       if (!connected) {
         $("positionStatus").textContent = "Connect Schwab first";
         $("reviewStatus").textContent = "Connect Schwab first";
         $("accounts").innerHTML = '<div class="account"><p class="muted">MnT is waiting for Schwab OAuth authorization.</p></div>';
-        $("positionReviews").innerHTML = '<div class="account"><p class="muted">Position-management guidance will appear after Schwab is connected.</p></div>';
+        $("positionReviews").innerHTML = '<div class="account"><p class="muted">Position-management guidance will appear after account access is enabled.</p></div>';
+        return;
+      }
+      if (!status.accounts_enabled) {
+        const message = 'Schwab is connected for market-data and option-chain analysis. Account balances and positions are intentionally not being requested.';
+        $("positionStatus").textContent = 'Analysis-only mode';
+        $("reviewStatus").textContent = 'Not in use';
+        $("accounts").innerHTML = `<div class="account"><p class="muted">${message}</p></div>`;
+        $("positionReviews").innerHTML = `<div class="account"><p class="muted">${message}</p></div>`;
         return;
       }
       const [payload] = await Promise.all([
@@ -197,7 +222,7 @@
       const params = new URLSearchParams({ direction, style, max_contract_cost: String(budget), limit: "5" });
       const payload = await getJson(`/api/schwab/options/${encodeURIComponent(symbol)}/candidates?${params}`);
       renderCandidates(payload);
-      $("candidateStatus").textContent = `${payload.candidate_count || 0} candidates · ${payload.provider || "schwab"} · research only`;
+      $("candidateStatus").textContent = `${payload.candidate_count || 0} candidates · ${payload.provider || "schwab"} · analysis only · no order submission`;
     } catch (error) {
       $("candidateStatus").textContent = error.message;
       $("candidates").innerHTML = "";
