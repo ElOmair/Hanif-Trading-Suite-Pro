@@ -59,6 +59,25 @@ def _aggregate_signal_calibration(summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _public_weight_challenge(challenge: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": challenge.get("status"),
+        "resolved": challenge.get("resolved"),
+        "training_count": challenge.get("training_count"),
+        "holdout_count": challenge.get("holdout_count"),
+        "recommend_candidate": bool(challenge.get("recommend_candidate")),
+        "holdout_improvement_pct_points": challenge.get("holdout_improvement_pct_points"),
+        "minimum_improvement_pct_points": challenge.get("minimum_improvement_pct_points"),
+        "baseline_holdout": challenge.get("baseline_holdout") or {},
+        "candidate_holdout": challenge.get("candidate_holdout") or {},
+        "proposed_changes": challenge.get("proposed_changes") or [],
+        "current_weights": challenge.get("current_weights") or {},
+        "candidate_weights": challenge.get("candidate_weights") or {},
+        "reason": challenge.get("reason"),
+        "research_only": True,
+    }
+
+
 def build_learning_snapshot(worker_status: dict[str, Any] | None = None) -> dict[str, Any]:
     """Build browser-safe learning metrics.
 
@@ -72,6 +91,7 @@ def build_learning_snapshot(worker_status: dict[str, Any] | None = None) -> dict
     options = report.get("option_contract_shadow_returns") or {}
     policy = report.get("policy") or {}
     layers = report.get("layer_effectiveness") or {}
+    challenge = report.get("weight_challenge") or {}
     current = policy.get("current") or {}
     recommended = policy.get("recommended") or {}
 
@@ -96,6 +116,7 @@ def build_learning_snapshot(worker_status: dict[str, Any] | None = None) -> dict
                 "reason": policy.get("reason"),
             },
             "layer_effectiveness": layers,
+            "weight_challenge": _public_weight_challenge(challenge),
         },
         "beginner_explanation": (
             "This page shows how MnT's shadow ideas are actually behaving. Small samples are learning data, not proof that a setup will keep working."
