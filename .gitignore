@@ -5,5 +5,9 @@ __pycache__/
 venv/
 .env
 dashboard/.env
+dashboard/mnt.env
+dashboard/data/*.sqlite3
+dashboard/data/mnt_alert_state.json
+dashboard/data/mnt_worker_status.json
 output/
 Hanif_Trading_Suite_Pro_Phase2/output/
