@@ -46,6 +46,29 @@ def test_token_status_never_exposes_token_values(monkeypatch, tmp_path):
     assert "refresh-secret" not in encoded
 
 
+def test_access_refresh_does_not_restart_seven_day_reauth_clock(monkeypatch, tmp_path):
+    _configure(monkeypatch, tmp_path)
+    monkeypatch.setattr(schwab, "_epoch_now", lambda: 1000.0)
+    schwab._write_private_json(
+        tmp_path / "tokens.json",
+        {
+            "access_token": "old-access",
+            "refresh_token": "old-refresh",
+            "access_expires_at": 1100.0,
+            "refresh_expires_at": 5000.0,
+        },
+    )
+    schwab._store_tokens(
+        {"access_token": "new-access", "refresh_token": "rotated-refresh", "expires_in": 1800},
+        initial=False,
+    )
+    stored = schwab._read_json(tmp_path / "tokens.json")
+    assert stored["access_token"] == "new-access"
+    assert stored["refresh_token"] == "rotated-refresh"
+    assert stored["refresh_expires_at"] == 5000.0
+    assert stored["access_expires_at"] == 2800.0
+
+
 def test_positions_mask_account_numbers_and_hashes(monkeypatch, tmp_path):
     _configure(monkeypatch, tmp_path)
 
