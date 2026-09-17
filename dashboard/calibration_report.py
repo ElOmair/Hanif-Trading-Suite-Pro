@@ -6,6 +6,7 @@ import os
 
 from calibration_policy import build_calibration_policy
 from layer_calibration import summarize_layer_effectiveness
+from option_shadow_store import option_mark_summary
 from shadow_trade_store import shadow_trade_summary
 from signal_store import calibration_summary, list_signals
 
@@ -40,11 +41,17 @@ def build_report(symbol: str | None = None, limit: int = 1000) -> dict:
         min_samples=_env_int("MNT_LAYER_MIN_SAMPLES", 10),
     )
     shadow = shadow_trade_summary(symbol=symbol, limit=limit)
+    option_returns = option_mark_summary(
+        symbol=symbol,
+        max_lag_minutes=_env_float("MNT_OPTION_MARK_MAX_LAG_MINUTES", 10.0),
+        limit=max(limit * 4, 1000),
+    )
     return {
         "summary": summary,
         "policy": policy,
         "layer_effectiveness": layers,
         "ready_alert_shadow_trades": shadow,
+        "option_contract_shadow_returns": option_returns,
     }
 
 
@@ -52,7 +59,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Print MnT outcome calibration, shadow threshold recommendations, "
-            "layer effectiveness, and READY-alert shadow-trade results."
+            "layer effectiveness, READY-alert shadow results, and actual option-contract quote returns."
         )
     )
     parser.add_argument("--symbol", help="Optional ticker to calibrate separately, e.g. SPY")
