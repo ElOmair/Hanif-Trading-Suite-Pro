@@ -50,6 +50,38 @@ def flatten_chain(chain: dict[str, Any], direction: str) -> list[dict[str, Any]]
     return rows
 
 
+def _style_eligible(contract: dict[str, Any], style: str) -> tuple[bool, str | None]:
+    """Apply hard style guardrails before ranking.
+
+    A contract that is excellent for a 0DTE/intraday trade should not outrank a
+    true swing contract merely because its spread and volume are better. Swing
+    mode intentionally refuses near-expiry lottery-like contracts instead of
+    forcing a candidate under the user's budget.
+    """
+    style = str(style or "auto").lower()
+    dte = max(0.0, _number(contract.get("daysToExpiration")) or 0.0)
+    delta = abs(_number(contract.get("delta")) or 0.0)
+
+    if style == "0dte":
+        if dte != 0:
+            return False, "0DTE mode only accepts contracts expiring today."
+    elif style in {"intraday", "day"}:
+        if dte > 7:
+            return False, "Intraday mode only accepts contracts with 0–7 DTE."
+    elif style == "swing":
+        if dte < 14 or dte > 90:
+            return False, "Swing mode requires 14–90 DTE; 21–60 DTE is preferred."
+        if delta and delta < 0.25:
+            return False, "Swing mode rejects very low-delta contracts below 0.25."
+    elif style == "position":
+        if dte < 30 or dte > 180:
+            return False, "Position mode requires 30–180 DTE."
+        if delta and delta < 0.30:
+            return False, "Position mode rejects low-delta contracts below 0.30."
+
+    return True, None
+
+
 def _fit_score(contract: dict[str, Any], *, style: str, max_contract_cost: float) -> tuple[float, dict[str, Any]]:
     bid = _number(contract.get("bid")) or 0.0
     ask = _number(contract.get("ask")) or 0.0
@@ -103,15 +135,20 @@ def _fit_score(contract: dict[str, Any], *, style: str, max_contract_cost: float
     score += max(-12.0, 12.0 - abs(delta - target_delta) * 60.0) if delta > 0 else -5.0
 
     if style in {"intraday", "0dte", "day"}:
-        if dte <= 7:
-            score += 8
-        elif dte > 14:
-            score -= 8
-    elif style in {"swing", "position"}:
-        if 21 <= dte <= 60:
+        if dte <= 2:
             score += 10
-        elif dte < 14 or dte > 90:
-            score -= 8
+        elif dte <= 7:
+            score += 5
+    elif style == "swing":
+        if 21 <= dte <= 60:
+            score += 14
+        elif 14 <= dte < 21 or 60 < dte <= 90:
+            score += 2
+    elif style == "position":
+        if 45 <= dte <= 120:
+            score += 12
+        elif 30 <= dte < 45 or 120 < dte <= 180:
+            score += 2
 
     # IV is contextual, not inherently bad; only penalize unusually extreme
     # levels here so the selector does not blindly chase very expensive premium.
@@ -144,6 +181,7 @@ def rank_option_candidates(
     rows = flatten_chain(chain, direction)
     output: list[dict[str, Any]] = []
     expected_type = "CALL" if str(direction).upper() == "LONG" else "PUT"
+    style_name = str(style or "auto").lower()
     for contract in rows:
         contract_type = str(contract.get("putCall") or contract.get("contractType") or expected_type).upper()
         if contract_type != expected_type:
@@ -151,7 +189,10 @@ def rank_option_candidates(
         ask = _number(contract.get("ask")) or 0.0
         if ask <= 0 or ask * 100.0 > float(max_contract_cost):
             continue
-        score, metrics = _fit_score(contract, style=style, max_contract_cost=float(max_contract_cost))
+        eligible, _ = _style_eligible(contract, style_name)
+        if not eligible:
+            continue
+        score, metrics = _fit_score(contract, style=style_name, max_contract_cost=float(max_contract_cost))
         output.append(
             {
                 "symbol": contract.get("symbol"),
@@ -165,6 +206,8 @@ def rank_option_candidates(
                 "last": _number(contract.get("last")),
                 "score": score,
                 "provider": "schwab",
+                "style": style_name,
+                "style_match": True,
                 "in_the_money": contract.get("inTheMoney"),
                 **metrics,
             }
