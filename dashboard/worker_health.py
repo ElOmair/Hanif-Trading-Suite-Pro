@@ -29,6 +29,7 @@ def build_worker_status(
 ) -> dict[str, Any]:
     results = results or []
     radar = next((item for item in results if item.get("stage") == "radar"), {})
+    option_marks = next((item for item in results if item.get("stage") == "option_marks"), {})
     symbol_rows = [item for item in results if item.get("symbol")]
 
     fusion_ok = sum(1 for item in symbol_rows if not item.get("error"))
@@ -78,7 +79,18 @@ def build_worker_status(
             "stand_down_sent": stand_downs,
             "suppressed_by_rank": suppressed,
         },
-        "shadow": {"ready_records_written": shadow_recorded},
+        "shadow": {
+            "ready_records_written": shadow_recorded,
+            "option_marks": {
+                "status": option_marks.get("status"),
+                "due": option_marks.get("due", 0),
+                "quoted_contracts": option_marks.get("quoted_contracts", 0),
+                "marks_recorded": option_marks.get("marks_recorded", 0),
+                "missing_quotes": option_marks.get("missing_quotes", 0),
+                "feed": option_marks.get("feed"),
+                "error": option_marks.get("error"),
+            },
+        },
         "loop_error": loop_error,
         "note": "Operational heartbeat only. No credentials, orders, or brokerage authorization are stored here.",
     }
