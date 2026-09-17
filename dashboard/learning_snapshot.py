@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from calibration_report import build_report
+from daily_scorecard import build_daily_scorecard
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_RUNTIME_PATH = ROOT / "static" / "mnt-runtime.json"
@@ -94,6 +95,10 @@ def build_learning_snapshot(worker_status: dict[str, Any] | None = None) -> dict
     challenge = report.get("weight_challenge") or {}
     current = policy.get("current") or {}
     recommended = policy.get("recommended") or {}
+    scorecard = build_daily_scorecard(
+        option_horizon_minutes=int(os.getenv("MNT_DAILY_SCORECARD_OPTION_HORIZON", "60")),
+        max_mark_lag_minutes=float(os.getenv("MNT_OPTION_MARK_MAX_LAG_MINUTES", "10")),
+    )
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -103,6 +108,7 @@ def build_learning_snapshot(worker_status: dict[str, Any] | None = None) -> dict
             "signal_calibration": _aggregate_signal_calibration(summary),
             "ready_alerts": shadow,
             "option_contract_returns": options,
+            "daily_scorecard": scorecard,
             "threshold_policy": {
                 "status": policy.get("status"),
                 "current_min_score": current.get("min_score"),
