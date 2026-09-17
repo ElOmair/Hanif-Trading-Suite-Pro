@@ -3,7 +3,7 @@ from worker_health import build_worker_status, read_worker_status, write_worker_
 
 def test_healthy_status_summarizes_scan(tmp_path):
     results = [
-        {"stage": "session_risk", "state": "NORMAL", "tripped": False, "enforced": False, "entry_review_blocked": False},
+        {"stage": "session_risk", "state": "NORMAL", "tripped": False, "enforced": False, "entry_review_blocked": False, "eligible_option_marks": 3, "ignored_timing_marks": 1},
         {"stage": "radar", "used": True, "cached": False, "stale": False, "shortlist": ["SPY", "NVDA"]},
         {
             "symbol": "SPY",
@@ -27,6 +27,15 @@ def test_healthy_status_summarizes_scan(tmp_path):
             "missing_quotes": 0,
             "feed": "indicative",
         },
+        {
+            "stage": "daily_scorecard",
+            "status": "sent",
+            "sent": True,
+            "session_date_et": "2026-09-17",
+            "quality_state": "MIXED",
+            "ready_ideas": 4,
+            "option_marks": 3,
+        },
     ]
     status = build_worker_status(results, market_active=True)
     assert status["worker_state"] == "HEALTHY"
@@ -39,6 +48,11 @@ def test_healthy_status_summarizes_scan(tmp_path):
     assert status["shadow"]["option_marks"]["marks_recorded"] == 2
     assert status["shadow"]["option_marks"]["feed"] == "indicative"
     assert status["session_risk"]["state"] == "NORMAL"
+    assert status["session_risk"]["eligible_option_marks"] == 3
+    assert status["session_risk"]["ignored_timing_marks"] == 1
+    assert status["daily_scorecard"]["status"] == "sent"
+    assert status["daily_scorecard"]["sent"] is True
+    assert status["daily_scorecard"]["quality_state"] == "MIXED"
 
 
 def test_risk_paused_status_is_explicit():
@@ -79,6 +93,7 @@ def test_partial_status_when_some_fusion_requests_fail():
 def test_off_hours_and_loop_error_states():
     off = build_worker_status([], market_active=False)
     assert off["worker_state"] == "OFF_HOURS"
+    assert off["daily_scorecard"]["sent"] is False
     error = build_worker_status([], market_active=True, loop_error="RuntimeError")
     assert error["worker_state"] == "ERROR"
 
