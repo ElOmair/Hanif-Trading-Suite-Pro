@@ -47,17 +47,33 @@
     const configured = Boolean(status?.configured);
     host.innerHTML = `
       <div class="mnt-broker-live-head">
-        <div><div class="eyebrow">LIVE SCHWAB / THINKORSWIM</div><strong>Portfolio awareness</strong></div>
+        <div><div class="eyebrow">SCHWAB / THINKORSWIM</div><strong>Market-data analysis</strong></div>
         <span class="mnt-broker-badge warning">${configured ? 'AUTH REQUIRED' : 'NOT CONFIGURED'}</span>
       </div>
-      <div class="fineprint">${configured ? 'Connect Schwab to let MnT see actual positions, balances, and buying power.' : 'Schwab is not enabled on this server yet.'}</div>
+      <div class="fineprint">${configured ? 'Connect Schwab to enable quotes and option-chain analysis.' : 'Schwab is not enabled on this server yet.'}</div>
       <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:9px">
         ${configured ? '<a class="ghost-button" href="/api/schwab/authorize">Connect Schwab</a>' : ''}
-        <a class="ghost-button" href="/broker">Open Broker Desk</a>
+        <a class="ghost-button" href="/broker">Open Analysis Desk</a>
+      </div>`;
+  }
+
+  function renderAnalysisOnly(host) {
+    host.innerHTML = `
+      <div class="mnt-broker-live-head">
+        <div><div class="eyebrow">SCHWAB / THINKORSWIM</div><strong>Market-data analysis</strong></div>
+        <span class="mnt-broker-badge connected">CONNECTED</span>
+      </div>
+      <div class="fineprint">Schwab quotes and option chains are active. Account balances and positions are intentionally disabled while you test MnT analysis with your current trading workflow.</div>
+      <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:9px">
+        <a class="ghost-button" href="/broker">Open Option Analysis</a>
       </div>`;
   }
 
   function renderPortfolio(host, payload) {
+    if (payload.available === false) {
+      renderAnalysisOnly(host);
+      return;
+    }
     const accounts = payload.accounts || [];
     let liquidation = 0;
     let cash = 0;
@@ -71,11 +87,7 @@
       for (const row of account.positions || []) positions.push(row);
     }
 
-    const topRows = positions
-      .slice()
-      .sort((a, b) => Math.abs(Number(b.market_value) || 0) - Math.abs(Number(a.market_value) || 0))
-      .slice(0, 5);
-
+    const topRows = positions.slice().sort((a, b) => Math.abs(Number(b.market_value) || 0) - Math.abs(Number(a.market_value) || 0)).slice(0, 5);
     host.innerHTML = `
       <div class="mnt-broker-live-head">
         <div><div class="eyebrow">LIVE SCHWAB / THINKORSWIM</div><strong>Portfolio awareness</strong></div>
@@ -117,10 +129,14 @@
         renderDisconnected(host, status);
         return;
       }
+      if (!status.accounts_enabled) {
+        renderAnalysisOnly(host);
+        return;
+      }
       const payload = await getJson('/api/schwab/positions');
       renderPortfolio(host, payload);
     } catch (error) {
-      host.innerHTML = `<div class="mnt-broker-live-head"><div><div class="eyebrow">LIVE SCHWAB / THINKORSWIM</div><strong>Portfolio awareness</strong></div><span class="mnt-broker-badge warning">OFFLINE</span></div><div class="fineprint">${safe(error.message)}</div><div style="margin-top:8px"><a class="ghost-button" href="/broker">Open Broker Desk</a></div>`;
+      host.innerHTML = `<div class="mnt-broker-live-head"><div><div class="eyebrow">SCHWAB / THINKORSWIM</div><strong>Market-data analysis</strong></div><span class="mnt-broker-badge warning">OFFLINE</span></div><div class="fineprint">${safe(error.message)}</div><div style="margin-top:8px"><a class="ghost-button" href="/broker">Open Analysis Desk</a></div>`;
     }
   }
 
