@@ -76,3 +76,17 @@ def test_prior_day_trades_do_not_count_against_today():
     result = evaluate_session_risk(trades, [], now=now, max_ready_alerts=2)
     assert result["ready_ideas_today"] == 1
     assert result["tripped"] is False
+
+
+def test_prior_day_bad_marks_do_not_trip_when_today_has_no_ready_ideas():
+    now = datetime(2026, 9, 16, 18, 0, tzinfo=timezone.utc)
+    trades = [
+        _trade(1, "2026-09-15T15:00:00+00:00"),
+        _trade(2, "2026-09-15T16:00:00+00:00"),
+        _trade(3, "2026-09-15T17:00:00+00:00"),
+    ]
+    marks = [_mark(1, 1, -40.0), _mark(2, 2, -35.0), _mark(3, 3, -30.0)]
+    result = evaluate_session_risk(trades, marks, now=now, max_ready_alerts=20)
+    assert result["ready_ideas_today"] == 0
+    assert result["consecutive_bad_option_marks"] == 0
+    assert result["tripped"] is False
