@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from option_shadow_store import list_option_marks
+from option_shadow_store import list_option_marks, mark_timing_error_minutes
 from shadow_trade_store import list_shadow_trades
 
 ET = ZoneInfo("America/New_York")
@@ -54,13 +54,15 @@ def evaluate_session_risk(
     loss_horizon_minutes: int = 60,
     bad_option_return_pct: float = -25.0,
     max_consecutive_bad_marks: int = 3,
+    max_mark_timing_error_minutes: float = 10.0,
     enforce: bool = False,
 ) -> dict[str, Any]:
     """Evaluate daily alert fatigue / loss-streak risk from shadow evidence.
 
     This governor is intentionally based on what MnT actually surfaced, not on
     brokerage P/L. It defaults to advisory mode and must be explicitly enabled
-    before it can suppress new alert delivery.
+    before it can suppress new alert delivery. Option marks only influence the
+    streak when their source quote timing is close enough to the requested horizon.
     """
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     today_et = now.astimezone(ET).date()
@@ -76,12 +78,15 @@ def evaluate_session_risk(
             today_trade_ids.add(int(trade["id"]))
 
     relevant_marks = []
+    ignored_timing_marks = 0
     for mark in marks:
         if int(mark.get("horizon_minutes") or 0) != int(loss_horizon_minutes):
             continue
-        # Only marks belonging to READY ideas created in today's ET session can
-        # influence today's breaker. With zero READY ideas today, zero marks count.
         if int(mark.get("shadow_trade_id") or -1) not in today_trade_ids:
+            continue
+        timing_error = mark_timing_error_minutes(mark)
+        if timing_error is None or timing_error > float(max_mark_timing_error_minutes):
+            ignored_timing_marks += 1
             continue
         value = mark.get("return_bid_vs_entry_ask_pct")
         try:
@@ -120,6 +125,9 @@ def evaluate_session_risk(
         "max_ready_alerts": int(max_ready_alerts),
         "loss_horizon_minutes": int(loss_horizon_minutes),
         "bad_option_return_pct": float(bad_option_return_pct),
+        "eligible_option_marks": len(relevant_marks),
+        "ignored_timing_marks": ignored_timing_marks,
+        "max_mark_timing_error_minutes": float(max_mark_timing_error_minutes),
         "consecutive_bad_option_marks": consecutive_bad,
         "max_consecutive_bad_marks": int(max_consecutive_bad_marks),
         "reasons": reasons,
@@ -141,5 +149,6 @@ def session_risk_status(now: datetime | None = None) -> dict[str, Any]:
         loss_horizon_minutes=_env_int("MNT_SESSION_LOSS_HORIZON_MINUTES", 60, 1),
         bad_option_return_pct=_env_float("MNT_SESSION_BAD_OPTION_RETURN_PCT", -25.0),
         max_consecutive_bad_marks=_env_int("MNT_SESSION_MAX_CONSECUTIVE_BAD_MARKS", 3, 1),
+        max_mark_timing_error_minutes=max(0.0, _env_float("MNT_SESSION_MAX_MARK_TIMING_ERROR_MINUTES", 10.0)),
         enforce=_env_bool("MNT_SESSION_RISK_ENFORCE", False),
     )
