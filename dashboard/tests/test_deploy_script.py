@@ -24,6 +24,17 @@ def test_deploy_script_uses_mnt_only_override_not_full_env_example():
     assert "/home/airomair/Kronos/.env" in text
 
 
+def test_deploy_script_does_not_source_credentials_as_shell_code():
+    text = SCRIPT.read_text(encoding="utf-8")
+    executable_lines = [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    assert not any(line.startswith("source ") for line in executable_lines)
+    assert not any(line.startswith(". /home/airomair/Kronos/.env") for line in executable_lines)
+
+
 def test_deploy_script_runs_preflight_before_worker_restart():
     text = SCRIPT.read_text(encoding="utf-8")
     preflight = text.index("mnt_preflight.py")
