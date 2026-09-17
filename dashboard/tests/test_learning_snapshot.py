@@ -43,6 +43,17 @@ def test_learning_snapshot_only_exposes_aggregate_metrics(monkeypatch):
             },
         },
     )
+    monkeypatch.setattr(
+        learning_snapshot,
+        "build_daily_scorecard",
+        lambda **kwargs: {
+            "session_date_et": "2026-09-17",
+            "quality_state": "MIXED",
+            "ready_ideas": 4,
+            "option_marks": {"count": 3, "average_return_pct": 4.2},
+            "next_session_note": "Keep current gates.",
+        },
+    )
     worker = {
         "worker_state": "HEALTHY",
         "heartbeat_at": "2026-09-17T00:00:00+00:00",
@@ -55,6 +66,7 @@ def test_learning_snapshot_only_exposes_aggregate_metrics(monkeypatch):
     calibration = payload["learning"]["signal_calibration"]
     threshold = payload["learning"]["threshold_policy"]
     challenge = payload["learning"]["weight_challenge"]
+    scorecard = payload["learning"]["daily_scorecard"]
     assert payload["mode"] == "shadow/research"
     assert calibration["resolved"] == 8
     assert calibration["wins"] == 5
@@ -65,6 +77,8 @@ def test_learning_snapshot_only_exposes_aggregate_metrics(monkeypatch):
     assert challenge["status"] == "KEEP_CURRENT"
     assert challenge["holdout_count"] == 15
     assert challenge["recommend_candidate"] is False
+    assert scorecard["quality_state"] == "MIXED"
+    assert scorecard["ready_ideas"] == 4
     assert payload["learning"]["option_contract_returns"]["horizons"]["60"]["count"] == 3
     assert payload["worker"]["radar"]["shortlist"] == ["SPY", "NVDA"]
     assert "must-not-leak" not in encoded
