@@ -8,7 +8,9 @@ Type=simple
 User=airomair
 Group=airomair
 WorkingDirectory=/home/airomair/Hanif-Trading-Suite-Pro/dashboard
+# Shared Kronos credentials/settings first, then optional dashboard-specific overrides.
 EnvironmentFile=-/home/airomair/Kronos/.env
+EnvironmentFile=-/home/airomair/Hanif-Trading-Suite-Pro/dashboard/.env
 Environment=KRONOS_API_URL=http://127.0.0.1:8000
 ExecStart=/home/airomair/kronos-venv/bin/uvicorn app:app --host 127.0.0.1 --port 8080
 Restart=always
