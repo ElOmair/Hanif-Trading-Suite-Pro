@@ -38,6 +38,7 @@ def test_scorecard_message_is_shadow_only_and_has_best_worst():
             "discord_delivered": 3,
             "underlying_outcomes": {"wins": 2, "losses": 1, "target_first_win_rate_pct": 66.7},
             "option_horizon_minutes": 60,
+            "option_evidence": {"eligible_trades": 3, "measured_trades": 3, "missing_eligible_trades": 0, "completeness_pct": 100.0, "complete": True},
             "option_marks": {"count": 3, "average_return_pct": 5.5, "positive_rate_pct": 66.7},
             "best_option": {"underlying": "NVDA", "direction": "LONG", "return_pct": 35},
             "worst_option": {"underlying": "TSLA", "direction": "SHORT", "return_pct": -20},
@@ -45,10 +46,35 @@ def test_scorecard_message_is_shadow_only_and_has_best_worst():
         }
     )
     text = message["embeds"][0]["description"]
+    title = message["embeds"][0]["title"]
     assert "NVDA" in text
     assert "TSLA" in text
+    assert "3/3 eligible ideas measured" in text
     assert "Keep current gates" in text
     assert "No brokerage orders" in text
+    assert "PARTIAL" not in title
+
+
+def test_partial_evidence_is_explicit_in_scorecard_title_and_body():
+    message = alert.build_scorecard_message(
+        {
+            "session_date_et": "2026-09-17",
+            "quality_state": "COLLECTING",
+            "ready_ideas": 3,
+            "long_ideas": 2,
+            "short_ideas": 1,
+            "discord_delivered": 3,
+            "underlying_outcomes": {"wins": 0, "losses": 0},
+            "option_horizon_minutes": 60,
+            "option_evidence": {"eligible_trades": 3, "measured_trades": 2, "missing_eligible_trades": 1, "completeness_pct": 66.7, "complete": False},
+            "option_marks": {"count": 2, "average_return_pct": 2.5, "positive_rate_pct": 50.0},
+            "next_session_note": "Keep collecting shadow evidence.",
+        }
+    )
+    assert "PARTIAL" in message["embeds"][0]["title"]
+    text = message["embeds"][0]["description"]
+    assert "2/3 eligible ideas measured" in text
+    assert "Partial evidence" in text
 
 
 def test_disabled_scorecard_does_not_send(monkeypatch):
