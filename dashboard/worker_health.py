@@ -30,6 +30,7 @@ def build_worker_status(
     results = results or []
     radar = next((item for item in results if item.get("stage") == "radar"), {})
     option_marks = next((item for item in results if item.get("stage") == "option_marks"), {})
+    session_risk = next((item for item in results if item.get("stage") == "session_risk"), {})
     symbol_rows = [item for item in results if item.get("symbol")]
 
     fusion_ok = sum(1 for item in symbol_rows if not item.get("error"))
@@ -46,6 +47,8 @@ def build_worker_status(
         state = "ERROR"
     elif not market_active:
         state = "OFF_HOURS"
+    elif session_risk.get("entry_review_blocked"):
+        state = "RISK_PAUSED"
     elif fusion_errors and not fusion_ok:
         state = "DEGRADED"
     elif fusion_errors:
@@ -59,6 +62,15 @@ def build_worker_status(
         "heartbeat_at": now,
         "scan_started_at": scan_started_at,
         "scan_finished_at": scan_finished_at or now,
+        "session_risk": {
+            "state": session_risk.get("state"),
+            "tripped": bool(session_risk.get("tripped")),
+            "enforced": bool(session_risk.get("enforced")),
+            "entry_review_blocked": bool(session_risk.get("entry_review_blocked")),
+            "ready_ideas_today": session_risk.get("ready_ideas_today"),
+            "consecutive_bad_option_marks": session_risk.get("consecutive_bad_option_marks"),
+            "reasons": session_risk.get("reasons") or [],
+        },
         "radar": {
             "used": radar.get("used"),
             "cached": radar.get("cached"),
