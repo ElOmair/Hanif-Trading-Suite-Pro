@@ -7,23 +7,23 @@ def test_learning_snapshot_only_exposes_aggregate_metrics(monkeypatch):
         "build_report",
         lambda limit=2000: {
             "summary": {
-                "total": 12,
-                "resolved": 8,
-                "wins": 5,
-                "losses": 3,
-                "ambiguous": 1,
-                "pending": 3,
-                "target_first_win_rate_pct": 62.5,
+                "total_count": 12,
+                "evaluated_count": 9,
+                "score_buckets": {
+                    "70-79": {"wins": 3, "losses": 2, "ambiguous": 1, "unresolved": 0},
+                    "80-89": {"wins": 2, "losses": 1, "ambiguous": 0, "unresolved": 0},
+                },
             },
             "ready_alert_shadow_trades": {"shadow_trades": 6, "resolved": 4},
             "option_contract_shadow_returns": {"horizons": {"60": {"count": 3, "average_return_pct": 12.5}}},
             "policy": {
-                "status": "INSUFFICIENT_SAMPLE",
-                "current_min_score": 62,
-                "recommended_min_score": 62,
-                "resolved_samples": 8,
-                "minimum_samples_required": 30,
+                "status": "SHADOW_LEARNING",
+                "resolved_count": 8,
+                "minimum_resolved_samples": 30,
                 "target_win_rate_pct": 55,
+                "current": {"min_score": 62, "min_coverage_pct": 55},
+                "recommended": {"min_score": 62, "min_coverage_pct": 55},
+                "score_delta": 0,
                 "reason": "Need more data",
             },
             "layer_effectiveness": {"technical": {"sample_count": 8}},
@@ -38,8 +38,15 @@ def test_learning_snapshot_only_exposes_aggregate_metrics(monkeypatch):
     }
     payload = learning_snapshot.build_learning_snapshot(worker)
     encoded = str(payload)
+    calibration = payload["learning"]["signal_calibration"]
+    threshold = payload["learning"]["threshold_policy"]
     assert payload["mode"] == "shadow/research"
-    assert payload["learning"]["signal_calibration"]["resolved"] == 8
+    assert calibration["resolved"] == 8
+    assert calibration["wins"] == 5
+    assert calibration["losses"] == 3
+    assert calibration["target_first_win_rate_pct"] == 62.5
+    assert threshold["current_min_score"] == 62
+    assert threshold["recommended_min_score"] == 62
     assert payload["learning"]["option_contract_returns"]["horizons"]["60"]["count"] == 3
     assert payload["worker"]["radar"]["shortlist"] == ["SPY", "NVDA"]
     assert "must-not-leak" not in encoded
