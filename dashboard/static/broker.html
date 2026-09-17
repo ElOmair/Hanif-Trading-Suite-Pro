@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>MnT Broker Desk</title>
-  <link rel="stylesheet" href="/static/broker.css?v=20260917-0230">
-  <link rel="stylesheet" href="/static/unified-shell.css?v=20260917-0230">
+  <link rel="stylesheet" href="/static/broker.css?v=20260917-0330">
+  <link rel="stylesheet" href="/static/unified-shell.css?v=20260917-0330">
 </head>
 <body id="top">
   <nav class="mnt-nav" aria-label="MnT sections">
@@ -21,7 +21,7 @@
       <div>
         <div class="eyebrow">MnT LOGIC · BROKER DATA</div>
         <h1>Schwab / thinkorswim Broker Desk</h1>
-        <p>Read-only account awareness and Schwab-backed option candidate research.</p>
+        <p>Read-only account awareness, position management guidance, and Schwab-backed option candidate research.</p>
       </div>
       <a class="back" href="/">← Main dashboard</a>
     </header>
@@ -51,6 +51,11 @@
     </section>
 
     <section>
+      <div class="section-head"><div><div class="eyebrow">MNT POSITION MANAGER</div><h2>What needs attention?</h2></div><span id="reviewStatus">Waiting</span></div>
+      <div id="positionReviews" class="accounts"><div class="account"><p class="muted">Connect Schwab to let MnT review your existing positions.</p></div></div>
+    </section>
+
+    <section>
       <div class="section-head"><div><div class="eyebrow">LIVE ACCOUNT VIEW</div><h2>Positions</h2></div><span id="positionStatus">Waiting</span></div>
       <div id="accounts" class="accounts"></div>
     </section>
@@ -68,6 +73,6 @@
       <div id="candidates" class="table-wrap"></div>
     </section>
   </main>
-  <script src="/static/broker.js?v=20260917-0230"></script>
+  <script src="/static/broker.js?v=20260917-0330"></script>
 </body>
 </html>
