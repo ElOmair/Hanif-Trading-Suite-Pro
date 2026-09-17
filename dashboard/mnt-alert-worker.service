@@ -6,9 +6,12 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=airomair
+Group=airomair
 WorkingDirectory=/home/airomair/Hanif-Trading-Suite-Pro/dashboard
+# Shared Kronos credentials/settings first, then optional dashboard-specific overrides.
+EnvironmentFile=-/home/airomair/Kronos/.env
 EnvironmentFile=-/home/airomair/Hanif-Trading-Suite-Pro/dashboard/.env
-ExecStart=/usr/bin/python3 /home/airomair/Hanif-Trading-Suite-Pro/dashboard/mnt_alert_supervisor.py
+ExecStart=/home/airomair/kronos-venv/bin/python /home/airomair/Hanif-Trading-Suite-Pro/dashboard/mnt_alert_supervisor.py
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
