@@ -1,0 +1,131 @@
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const money = (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 }) : "—";
+  };
+  const num = (value, digits = 2) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n.toFixed(digits) : "—";
+  };
+  const pct = (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? `${n >= 0 ? "+" : ""}${n.toFixed(1)}%` : "—";
+  };
+  const dateText = (value) => {
+    if (!value) return "—";
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString();
+  };
+  const safe = (value, fallback = "—") => value === undefined || value === null || value === "" ? fallback : String(value);
+
+  async function getJson(url) {
+    const response = await fetch(url, { cache: "no-store" });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.detail || `HTTP ${response.status}`);
+    return body;
+  }
+
+  async function refreshStatus() {
+    try {
+      const status = await getJson("/api/schwab/status");
+      const connected = Boolean(status.authorized && status.refresh_token_valid);
+      $("connectionState").textContent = connected ? "CONNECTED" : status.configured ? "AUTH REQUIRED" : "NOT CONFIGURED";
+      $("connectionNote").textContent = status.configured ? "Schwab Trader/Market Data API" : "Add Schwab app settings to mnt.env.";
+      $("accessState").textContent = status.access_token_valid ? "VALID" : connected ? "AUTO-REFRESH" : "—";
+      $("accessExpiry").textContent = `Expires: ${dateText(status.access_expires_at)}`;
+      $("refreshState").textContent = status.reauthorization_required ? "LOGIN DUE" : status.refresh_token_valid ? "VALID" : "—";
+      $("refreshExpiry").textContent = `Refresh expires: ${dateText(status.refresh_expires_at)}`;
+      $("orderState").textContent = status.order_submission_enabled ? "ENABLED" : "DISABLED";
+      $("connectButton").classList.toggle("hidden", !status.configured || connected);
+      return connected;
+    } catch (error) {
+      $("connectionState").textContent = "ERROR";
+      $("connectionNote").textContent = error.message;
+      return false;
+    }
+  }
+
+  function renderPositions(payload) {
+    const accounts = payload.accounts || [];
+    if (!accounts.length) {
+      $("accounts").innerHTML = '<div class="account"><p class="muted">No positions returned from Schwab.</p></div>';
+      return;
+    }
+    $("accounts").innerHTML = accounts.map((account) => {
+      const balances = account.balances || {};
+      const rows = account.positions || [];
+      return `
+        <article class="account">
+          <div class="account-head"><div><h3>${safe(account.account)}</h3><div class="muted">${safe(account.type, "Brokerage")}</div></div><div>${rows.length} positions</div></div>
+          <div class="balances">
+            <span>Liquidation ${money(balances.liquidation_value)}</span>
+            <span>Cash ${money(balances.cash_balance)}</span>
+            <span>Available ${money(balances.available_funds)}</span>
+            <span>Buying power ${money(balances.buying_power)}</span>
+          </div>
+          <div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Type</th><th>Long</th><th>Short</th><th>Avg</th><th>Market Value</th><th>Day P/L</th><th>Day %</th></tr></thead><tbody>
+          ${rows.map((row) => {
+            const pnl = Number(row.current_day_profit_loss);
+            const cls = Number.isFinite(pnl) ? (pnl >= 0 ? "positive" : "negative") : "";
+            return `<tr><td>${safe(row.symbol)}</td><td>${safe(row.asset_type)}</td><td>${num(row.long_quantity)}</td><td>${num(row.short_quantity)}</td><td>${money(row.average_price)}</td><td>${money(row.market_value)}</td><td class="${cls}">${money(row.current_day_profit_loss)}</td><td class="${cls}">${pct(row.current_day_profit_loss_pct)}</td></tr>`;
+          }).join("")}
+          </tbody></table></div>
+        </article>`;
+    }).join("");
+  }
+
+  async function refreshPositions() {
+    $("positionStatus").textContent = "Loading…";
+    try {
+      const connected = await refreshStatus();
+      if (!connected) {
+        $("positionStatus").textContent = "Connect Schwab first";
+        $("accounts").innerHTML = '<div class="account"><p class="muted">MnT is waiting for Schwab OAuth authorization.</p></div>';
+        return;
+      }
+      const payload = await getJson("/api/schwab/positions");
+      renderPositions(payload);
+      $("positionStatus").textContent = `Updated ${new Date().toLocaleTimeString()}`;
+    } catch (error) {
+      $("positionStatus").textContent = "Error";
+      $("accounts").innerHTML = `<div class="account"><p class="negative">${safe(error.message)}</p></div>`;
+    }
+  }
+
+  function renderCandidates(payload) {
+    const rows = payload.candidates || [];
+    if (!rows.length) {
+      $("candidates").innerHTML = '<p class="muted">No contracts met the budget/liquidity filters.</p>';
+      return;
+    }
+    $("candidates").innerHTML = `<table><thead><tr><th>Contract</th><th>Strike</th><th>Expiry</th><th>Bid</th><th>Ask</th><th>Cost</th><th>Spread</th><th>Delta</th><th>Vol</th><th>OI</th><th>DTE</th><th>Score</th></tr></thead><tbody>
+      ${rows.map((row) => `<tr><td>${safe(row.symbol)}</td><td>${num(row.strike)}</td><td>${safe(row.expiration)}</td><td>${money(row.bid)}</td><td>${money(row.ask)}</td><td>${money(row.estimated_cost)}</td><td>${pct(row.spread_pct)}</td><td>${num(row.delta, 3)}</td><td>${safe(row.volume)}</td><td>${safe(row.open_interest)}</td><td>${safe(row.days_to_expiration)}</td><td><strong>${num(row.score, 1)}</strong></td></tr>`).join("")}
+    </tbody></table>`;
+  }
+
+  async function scanCandidates(event) {
+    event.preventDefault();
+    const symbol = $("symbol").value.trim().toUpperCase();
+    const direction = $("direction").value;
+    const style = $("style").value;
+    const budget = Number($("budget").value || 300);
+    $("candidateStatus").textContent = "Scanning Schwab option chain…";
+    $("candidates").innerHTML = "";
+    try {
+      const params = new URLSearchParams({ direction, style, max_contract_cost: String(budget), limit: "5" });
+      const payload = await getJson(`/api/schwab/options/${encodeURIComponent(symbol)}/candidates?${params}`);
+      renderCandidates(payload);
+      $("candidateStatus").textContent = `${payload.candidate_count || 0} candidates · ${payload.provider || "schwab"} · research only`;
+    } catch (error) {
+      $("candidateStatus").textContent = error.message;
+      $("candidates").innerHTML = "";
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    $("refreshPositions").addEventListener("click", refreshPositions);
+    $("candidateForm").addEventListener("submit", scanCandidates);
+    refreshPositions();
+  });
+})();
