@@ -24,6 +24,18 @@ def _report_fixture():
             "reason": "Need more data",
         },
         "layer_effectiveness": {"technical": {"sample_count": 8}},
+        "edge_slices": {
+            "resolved": 20,
+            "baseline_win_rate_pct": 55.0,
+            "minimum_samples_per_slice": 8,
+            "best_supported_slices": [
+                {"dimension": "symbol", "value": "SPY", "resolved": 10, "win_rate_pct": 80.0, "lift_vs_all_pct_points": 25.0, "state": "SUPPORTED"}
+            ],
+            "weakest_supported_slices": [
+                {"dimension": "session", "value": "AFTERNOON", "resolved": 9, "win_rate_pct": 33.3, "lift_vs_all_pct_points": -21.7, "state": "CAUTION"}
+            ],
+            "by_dimension": {"symbol": [], "session": []},
+        },
         "weight_challenge": {
             "status": "KEEP_CURRENT",
             "resolved": 50,
@@ -67,6 +79,7 @@ def test_learning_snapshot_only_exposes_aggregate_metrics(monkeypatch):
     threshold = payload["learning"]["threshold_policy"]
     challenge = payload["learning"]["weight_challenge"]
     scorecard = payload["learning"]["daily_scorecard"]
+    slices = payload["learning"]["edge_slices"]
     assert payload["mode"] == "shadow/research"
     assert calibration["resolved"] == 8
     assert calibration["wins"] == 5
@@ -79,6 +92,9 @@ def test_learning_snapshot_only_exposes_aggregate_metrics(monkeypatch):
     assert challenge["recommend_candidate"] is False
     assert scorecard["quality_state"] == "MIXED"
     assert scorecard["ready_ideas"] == 4
+    assert slices["baseline_win_rate_pct"] == 55.0
+    assert slices["best_supported_slices"][0]["value"] == "SPY"
+    assert slices["weakest_supported_slices"][0]["value"] == "AFTERNOON"
     assert payload["learning"]["option_contract_returns"]["horizons"]["60"]["count"] == 3
     assert payload["worker"]["radar"]["shortlist"] == ["SPY", "NVDA"]
     assert "must-not-leak" not in encoded
