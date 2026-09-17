@@ -17,6 +17,15 @@ def test_healthy_status_summarizes_scan(tmp_path):
             "sent": False,
             "suppressed_by_rank": True,
         },
+        {
+            "stage": "option_marks",
+            "status": "ok",
+            "due": 2,
+            "quoted_contracts": 1,
+            "marks_recorded": 2,
+            "missing_quotes": 0,
+            "feed": "indicative",
+        },
     ]
     status = build_worker_status(results, market_active=True)
     assert status["worker_state"] == "HEALTHY"
@@ -26,6 +35,8 @@ def test_healthy_status_summarizes_scan(tmp_path):
     assert status["alerts"]["pretrigger_candidates"] == 1
     assert status["alerts"]["discord_sent"] == 1
     assert status["shadow"]["ready_records_written"] == 1
+    assert status["shadow"]["option_marks"]["marks_recorded"] == 2
+    assert status["shadow"]["option_marks"]["feed"] == "indicative"
 
 
 def test_partial_status_when_some_fusion_requests_fail():
