@@ -95,13 +95,19 @@ def _public_weight_challenge(challenge: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_learning_snapshot(worker_status: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Build browser-safe learning metrics.
+def _public_edge_slices(slices: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "resolved": slices.get("resolved"),
+        "baseline_win_rate_pct": slices.get("baseline_win_rate_pct"),
+        "minimum_samples_per_slice": slices.get("minimum_samples_per_slice"),
+        "best_supported_slices": (slices.get("best_supported_slices") or [])[:5],
+        "weakest_supported_slices": (slices.get("weakest_supported_slices") or [])[:5],
+        "by_dimension": slices.get("by_dimension") or {},
+        "research_only": True,
+    }
 
-    No environment values, credentials, raw alert payloads, or brokerage data are
-    written to this file. It contains only aggregate shadow/calibration metrics
-    and the operational heartbeat already intended for local status display.
-    """
+
+def build_learning_snapshot(worker_status: dict[str, Any] | None = None) -> dict[str, Any]:
     report = build_report(limit=2000)
     summary = report.get("summary") or {}
     shadow = report.get("ready_alert_shadow_trades") or {}
@@ -109,6 +115,7 @@ def build_learning_snapshot(worker_status: dict[str, Any] | None = None) -> dict
     policy = report.get("policy") or {}
     layers = report.get("layer_effectiveness") or {}
     challenge = report.get("weight_challenge") or {}
+    edge_slices = report.get("edge_slices") or {}
     current = policy.get("current") or {}
     recommended = policy.get("recommended") or {}
     scorecard = build_daily_scorecard(
@@ -125,6 +132,7 @@ def build_learning_snapshot(worker_status: dict[str, Any] | None = None) -> dict
             "ready_alerts": shadow,
             "option_contract_returns": options,
             "daily_scorecard": scorecard,
+            "edge_slices": _public_edge_slices(edge_slices),
             "threshold_policy": {
                 "status": policy.get("status"),
                 "current_min_score": current.get("min_score"),
@@ -140,17 +148,12 @@ def build_learning_snapshot(worker_status: dict[str, Any] | None = None) -> dict
             "layer_effectiveness": layers,
             "weight_challenge": _public_weight_challenge(challenge),
         },
-        "beginner_explanation": (
-            "This page shows how MnT's shadow ideas are actually behaving. Small samples are learning data, not proof that a setup will keep working."
-        ),
+        "beginner_explanation": "This page shows how MnT's shadow ideas are actually behaving. Small samples are learning data, not proof that a setup will keep working.",
         "research_only": True,
     }
 
 
-def write_learning_snapshot(
-    worker_status: dict[str, Any] | None = None,
-    path: Path | None = None,
-) -> Path:
+def write_learning_snapshot(worker_status: dict[str, Any] | None = None, path: Path | None = None) -> Path:
     path = path or runtime_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = build_learning_snapshot(worker_status)
