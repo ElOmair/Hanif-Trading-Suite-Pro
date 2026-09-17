@@ -113,6 +113,7 @@
     const options = learning.option_contract_returns || {};
     const policy = learning.threshold_policy || {};
     const challenge = learning.weight_challenge || {};
+    const scorecard = learning.daily_scorecard || {};
     const risk = worker.session_risk || {};
     const badge = workerBadge(worker);
     const threshold = thresholdText(policy);
@@ -124,6 +125,7 @@
     const readyResolved = Number(ready.resolved || 0);
     const riskBlocked = Boolean(risk.entry_review_blocked);
     const scanShortlist = (worker.radar?.shortlist || []).join(", ") || "none yet";
+    const dayMarks = scorecard.option_marks || {};
 
     shell.innerHTML = `
       <div class="mnt-learning-head">
@@ -136,6 +138,11 @@
       </div>
 
       <div class="mnt-learning-grid">
+        <div class="mnt-learning-card">
+          <span>Today's quality</span>
+          <strong>${safeText(scorecard.quality_state, "COLLECTING")}</strong>
+          <small>${integer(scorecard.ready_ideas)} READY ideas · ${integer(dayMarks.count)} measured ${integer(scorecard.option_horizon_minutes)}m option marks · avg ${signedPct(dayMarks.average_return_pct)}.</small>
+        </div>
         <div class="mnt-learning-card">
           <span>Signal outcomes</span>
           <strong>${pct(calibration.target_first_win_rate_pct)}</strong>
@@ -174,6 +181,7 @@
       <div class="mnt-learning-risk">
         <strong>Session governor:</strong> ${riskBlocked ? "PAUSED" : "OPEN"}
         · ${safeText(risk.beginner_explanation || risk.reason, "No session-risk restriction reported.")}
+        <br><strong>Next-session note:</strong> ${safeText(scorecard.next_session_note, "Keep collecting shadow evidence.")}
         <br><span class="muted">Current Fusion shortlist: ${scanShortlist}</span>
       </div>
 
@@ -182,6 +190,7 @@
       <details class="mnt-learning-details">
         <summary>Technical learning details</summary>
         <pre>${JSON.stringify({
+          daily_scorecard: scorecard,
           threshold_policy: policy,
           weight_challenge: challenge,
           layer_effectiveness: learning.layer_effectiveness || {},
