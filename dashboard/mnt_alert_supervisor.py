@@ -7,6 +7,7 @@ from pathlib import Path
 
 import httpx
 
+from learning_snapshot import write_learning_snapshot
 from mnt_alert_worker import AlertState, _env_float, market_scan_active, scan_once
 from option_shadow_collector import refresh_due_option_marks
 from session_risk import session_risk_status
@@ -79,6 +80,10 @@ async def run_forever() -> None:
                         loop_error=loop_error,
                     )
                     write_worker_status(status)
+                    # Publish only aggregate research metrics to the browser. The
+                    # snapshot intentionally excludes env values, credentials and
+                    # raw signal payloads.
+                    write_learning_snapshot(status)
                 except Exception as health_exc:
                     print(
                         json.dumps(
