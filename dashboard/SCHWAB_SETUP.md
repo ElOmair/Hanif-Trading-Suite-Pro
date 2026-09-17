@@ -65,7 +65,11 @@ cd /home/airomair/Hanif-Trading-Suite-Pro/dashboard
 ./deploy_mnt.sh
 ```
 
-The dashboard service now starts `app_schwab:app`, which retains the existing dashboard and mounts the Schwab routes.
+The dashboard service starts `app_schwab:app`, which retains the existing dashboard and mounts the Schwab routes.
+
+On the **first** deployment, preflight may report `schwab_authorization` as a warning because no OAuth token exists yet. That warning intentionally does not block deployment: the dashboard has to be online before you can open `/broker` and complete the interactive authorization flow.
+
+A Phase 1 deployment **will** fail preflight if `MNT_SCHWAB_ORDER_SUBMISSION_ENABLED=true`. Keep it false.
 
 ## 4. Authorize the Schwab account
 
@@ -79,6 +83,16 @@ Select **Connect Schwab** and complete the Schwab login/consent flow. MnT valida
 
 After success, the broker page should show `CONNECTED` and display only masked account identifiers.
 
+Then rerun preflight if desired:
+
+```bash
+cd /home/airomair/Hanif-Trading-Suite-Pro/dashboard
+source /home/airomair/kronos-venv/bin/activate
+python mnt_preflight.py
+```
+
+The Schwab authorization check should now be green instead of a warning.
+
 ## 5. Validate from the Kronos shell
 
 ```bash
@@ -88,7 +102,7 @@ curl -sS 'http://127.0.0.1:8080/api/schwab/quotes?symbols=SPY,QQQ' | python -m j
 curl -sS 'http://127.0.0.1:8080/api/schwab/options/SPY/candidates?direction=LONG&style=swing&max_contract_cost=300&limit=5' | python -m json.tool
 ```
 
-The status endpoint intentionally does not return access tokens, refresh tokens, the client secret, raw account numbers, or account hashes.
+The status endpoint intentionally does not return access tokens, refresh tokens, the client secret, raw account numbers, or account hashes. It also reports `order_submission_enabled: false` throughout Phase 1.
 
 ## 6. Token behavior
 
