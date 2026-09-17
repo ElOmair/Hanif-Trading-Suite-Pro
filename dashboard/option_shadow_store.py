@@ -70,13 +70,30 @@ def _connect() -> sqlite3.Connection:
     return connection
 
 
-def list_option_marks(shadow_trade_id: int | None = None, limit: int = 1000) -> list[dict[str, Any]]:
+def list_option_marks(
+    shadow_trade_id: int | None = None,
+    *,
+    symbol: str | None = None,
+    limit: int = 1000,
+) -> list[dict[str, Any]]:
     limit = max(1, min(10000, int(limit)))
     with _connect() as connection:
         if shadow_trade_id is not None:
             rows = connection.execute(
                 "SELECT * FROM mnt_option_shadow_marks WHERE shadow_trade_id = ? ORDER BY horizon_minutes",
                 (int(shadow_trade_id),),
+            ).fetchall()
+        elif symbol:
+            rows = connection.execute(
+                """
+                SELECT marks.*
+                FROM mnt_option_shadow_marks AS marks
+                JOIN mnt_shadow_trades AS trades ON trades.id = marks.shadow_trade_id
+                WHERE trades.symbol = ?
+                ORDER BY marks.id DESC
+                LIMIT ?
+                """,
+                (symbol.strip().upper(), limit),
             ).fetchall()
         else:
             rows = connection.execute(
@@ -200,10 +217,11 @@ def record_option_mark(
 
 def option_mark_summary(
     *,
+    symbol: str | None = None,
     max_lag_minutes: float = 10.0,
     limit: int = 10000,
 ) -> dict[str, Any]:
-    marks = list_option_marks(limit=limit)
+    marks = list_option_marks(symbol=symbol, limit=limit)
     horizons: dict[str, Any] = {}
     for horizon in DEFAULT_HORIZONS:
         eligible = [
@@ -224,8 +242,14 @@ def option_mark_summary(
             "median_return_pct": round(statistics.median(returns), 2) if returns else None,
             "best_return_pct": round(max(returns), 2) if returns else None,
             "worst_return_pct": round(min(returns), 2) if returns else None,
+            "gain_20pct_or_more_count": sum(1 for value in returns if value >= 20.0),
+            "gain_50pct_or_more_count": sum(1 for value in returns if value >= 50.0),
+            "gain_100pct_or_more_count": sum(1 for value in returns if value >= 100.0),
+            "loss_25pct_or_worse_count": sum(1 for value in returns if value <= -25.0),
+            "loss_50pct_or_worse_count": sum(1 for value in returns if value <= -50.0),
         }
     return {
+        "symbol": symbol.strip().upper() if symbol else None,
         "marks_total": len(marks),
         "max_lag_minutes_in_summary": float(max_lag_minutes),
         "return_convention": "entry at surfaced ask; later mark at bid",
