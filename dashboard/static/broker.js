@@ -19,6 +19,21 @@
   };
   const safe = (value, fallback = "—") => value === undefined || value === null || value === "" ? fallback : String(value);
 
+  function underlying(row) {
+    const symbol = String(row?.symbol || '').trim().toUpperCase();
+    if (!symbol) return '';
+    return String(row?.asset_type || '').toUpperCase() === 'OPTION' ? symbol.split(/\s+/)[0] : symbol;
+  }
+
+  function openPnl(row) {
+    const direct = Number(row?.unrealized_profit_loss);
+    if (Number.isFinite(direct)) return direct;
+    const longPnl = Number(row?.long_open_profit_loss);
+    const shortPnl = Number(row?.short_open_profit_loss);
+    if (Number.isFinite(longPnl) || Number.isFinite(shortPnl)) return (Number.isFinite(longPnl) ? longPnl : 0) + (Number.isFinite(shortPnl) ? shortPnl : 0);
+    return null;
+  }
+
   async function getJson(url) {
     const response = await fetch(url, { cache: "no-store" });
     const body = await response.json().catch(() => ({}));
@@ -64,11 +79,15 @@
             <span>Available ${money(balances.available_funds)}</span>
             <span>Buying power ${money(balances.buying_power)}</span>
           </div>
-          <div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Type</th><th>Long</th><th>Short</th><th>Avg</th><th>Market Value</th><th>Day P/L</th><th>Day %</th></tr></thead><tbody>
+          <div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Type</th><th>Long</th><th>Short</th><th>Avg</th><th>Market Value</th><th>Open P/L</th><th>Day P/L</th><th>Day %</th><th>MnT</th></tr></thead><tbody>
           ${rows.map((row) => {
             const pnl = Number(row.current_day_profit_loss);
             const cls = Number.isFinite(pnl) ? (pnl >= 0 ? "positive" : "negative") : "";
-            return `<tr><td>${safe(row.symbol)}</td><td>${safe(row.asset_type)}</td><td>${num(row.long_quantity)}</td><td>${num(row.short_quantity)}</td><td>${money(row.average_price)}</td><td>${money(row.market_value)}</td><td class="${cls}">${money(row.current_day_profit_loss)}</td><td class="${cls}">${pct(row.current_day_profit_loss_pct)}</td></tr>`;
+            const open = openPnl(row);
+            const openCls = Number.isFinite(open) ? (open >= 0 ? 'positive' : 'negative') : '';
+            const u = underlying(row);
+            const analyze = u ? `/?symbol=${encodeURIComponent(u)}#trades` : '/';
+            return `<tr><td>${safe(row.symbol)}</td><td>${safe(row.asset_type)}</td><td>${num(row.long_quantity)}</td><td>${num(row.short_quantity)}</td><td>${money(row.average_price)}</td><td>${money(row.market_value)}</td><td class="${openCls}">${money(open)}</td><td class="${cls}">${money(row.current_day_profit_loss)}</td><td class="${cls}">${pct(row.current_day_profit_loss_pct)}</td><td><a class="button" href="${analyze}">Analyze</a></td></tr>`;
           }).join("")}
           </tbody></table></div>
         </article>`;
