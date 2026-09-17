@@ -3,16 +3,17 @@ from datetime import datetime, timezone
 import daily_scorecard
 
 
-def _trade(trade_id, symbol, direction="LONG", delivered=True, signal_id=None):
+def _trade(trade_id, symbol, direction="LONG", delivered=True, signal_id=None, created_at="2026-09-17T14:00:00+00:00"):
     return {
         "id": trade_id,
         "signal_id": signal_id or trade_id,
-        "created_at": "2026-09-17T14:00:00+00:00",
+        "created_at": created_at,
         "symbol": symbol,
         "direction": direction,
         "fusion_score": 80,
         "coverage_pct": 75,
         "option_symbol": f"{symbol}261016C00100000",
+        "option_ask": 2.0,
         "discord_sent": 1 if delivered else 0,
     }
 
@@ -56,6 +57,9 @@ def test_daily_scorecard_summarizes_option_and_underlying_results(monkeypatch):
     assert report["option_marks"]["count"] == 4
     assert report["option_marks"]["average_return_pct"] == 20.75
     assert report["option_marks"]["positive_rate_pct"] == 75.0
+    assert report["option_evidence"]["eligible_trades"] == 4
+    assert report["option_evidence"]["measured_trades"] == 4
+    assert report["option_evidence"]["complete"] is True
     assert report["quality_state"] == "STRONG"
     assert report["best_option"]["underlying"] == "NVDA"
     assert report["worst_option"]["underlying"] == "TSLA"
@@ -65,7 +69,7 @@ def test_daily_scorecard_ignores_wrong_day_horizon_and_late_marks(monkeypatch):
     monkeypatch.setattr(daily_scorecard, "get_signal", lambda signal_id: None)
     trades = [
         _trade(1, "SPY"),
-        {**_trade(2, "QQQ"), "created_at": "2026-09-16T14:00:00+00:00"},
+        _trade(2, "QQQ", created_at="2026-09-16T14:00:00+00:00"),
     ]
     marks = [
         _mark(1, 1, 20),
@@ -77,6 +81,7 @@ def test_daily_scorecard_ignores_wrong_day_horizon_and_late_marks(monkeypatch):
     assert report["ready_ideas"] == 1
     assert report["option_marks"]["count"] == 1
     assert report["option_marks"]["average_return_pct"] == 20.0
+    assert report["option_evidence"]["complete"] is True
     assert report["quality_state"] == "COLLECTING"
 
 
@@ -88,3 +93,26 @@ def test_daily_scorecard_flags_weak_option_session(monkeypatch):
     assert report["option_marks"]["positive_rate_pct"] == 33.3
     assert report["quality_state"] == "WEAK"
     assert "Keep current gates" not in report["next_session_note"]
+
+
+def test_daily_scorecard_marks_missing_eligible_horizon_evidence_partial(monkeypatch):
+    monkeypatch.setattr(daily_scorecard, "get_signal", lambda signal_id: None)
+    trades = [_trade(1, "SPY"), _trade(2, "QQQ"), _trade(3, "NVDA")]
+    marks = [_mark(1, 1, 10), _mark(2, 2, -5)]
+    report = daily_scorecard.build_daily_scorecard("2026-09-17", trades=trades, marks=marks)
+    evidence = report["option_evidence"]
+    assert evidence["eligible_trades"] == 3
+    assert evidence["measured_trades"] == 2
+    assert evidence["missing_eligible_trades"] == 1
+    assert evidence["completeness_pct"] == 66.7
+    assert evidence["complete"] is False
+
+
+def test_late_day_trade_not_expected_to_have_unreachable_60m_mark(monkeypatch):
+    monkeypatch.setattr(daily_scorecard, "get_signal", lambda signal_id: None)
+    # 15:30 ET + 60 minutes is well past close + 10-minute tolerance.
+    trade = _trade(1, "SPY", created_at="2026-09-17T19:30:00+00:00")
+    report = daily_scorecard.build_daily_scorecard("2026-09-17", trades=[trade], marks=[], max_mark_lag_minutes=10)
+    assert report["option_evidence"]["eligible_trades"] == 0
+    assert report["option_evidence"]["missing_eligible_trades"] == 0
+    assert report["option_evidence"]["complete"] is True
