@@ -17,6 +17,22 @@ def runtime_path() -> Path:
     return Path(os.getenv("MNT_RUNTIME_SNAPSHOT_FILE", str(DEFAULT_RUNTIME_PATH))).expanduser()
 
 
+def _env_int(name: str, default: int, minimum: int = 0) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, value)
+
+
+def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, value)
+
+
 def _public_worker_status(status: dict[str, Any] | None) -> dict[str, Any]:
     status = status or {}
     return {
@@ -96,8 +112,8 @@ def build_learning_snapshot(worker_status: dict[str, Any] | None = None) -> dict
     current = policy.get("current") or {}
     recommended = policy.get("recommended") or {}
     scorecard = build_daily_scorecard(
-        option_horizon_minutes=int(os.getenv("MNT_DAILY_SCORECARD_OPTION_HORIZON", "60")),
-        max_mark_lag_minutes=float(os.getenv("MNT_OPTION_MARK_MAX_LAG_MINUTES", "10")),
+        option_horizon_minutes=_env_int("MNT_DAILY_SCORECARD_OPTION_HORIZON", 60, 1),
+        max_mark_lag_minutes=_env_float("MNT_OPTION_MARK_MAX_LAG_MINUTES", 10.0, 0.0),
     )
 
     return {
