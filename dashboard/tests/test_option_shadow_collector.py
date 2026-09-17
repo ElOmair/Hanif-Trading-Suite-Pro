@@ -1,7 +1,6 @@
-import json
+import asyncio
 
 import httpx
-import pytest
 
 import option_shadow_collector as collector
 
@@ -17,8 +16,7 @@ def test_parse_latest_quotes_normalizes_alpaca_payload():
     assert quotes["SPY260918C00760000"]["ask"] == 2.2
 
 
-@pytest.mark.asyncio
-async def test_fetch_latest_quotes_falls_back_to_indicative_on_403():
+def test_fetch_latest_quotes_falls_back_to_indicative_on_403():
     calls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -40,15 +38,17 @@ async def test_fetch_latest_quotes_falls_back_to_indicative_on_403():
             },
         )
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        quotes, feed = await collector.fetch_latest_option_quotes(
-            client,
-            ["SPY260918C00760000"],
-            api_key="key",
-            secret_key="secret",
-            feed="opra",
-        )
+    async def run_case():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await collector.fetch_latest_option_quotes(
+                client,
+                ["SPY260918C00760000"],
+                api_key="key",
+                secret_key="secret",
+                feed="opra",
+            )
 
+    quotes, feed = asyncio.run(run_case())
     assert feed == "indicative"
     assert quotes["SPY260918C00760000"]["bid"] == 2.0
     assert len(calls) == 2
@@ -56,8 +56,7 @@ async def test_fetch_latest_quotes_falls_back_to_indicative_on_403():
     assert "feed=indicative" in calls[1]
 
 
-@pytest.mark.asyncio
-async def test_refresh_due_marks_reuses_one_quote_for_multiple_horizons(monkeypatch):
+def test_refresh_due_marks_reuses_one_quote_for_multiple_horizons(monkeypatch):
     due = [
         {
             "shadow_trade_id": 1,
@@ -95,9 +94,11 @@ async def test_refresh_due_marks_reuses_one_quote_for_multiple_horizons(monkeypa
     monkeypatch.setattr(collector, "fetch_latest_option_quotes", fake_fetch)
     monkeypatch.setattr(collector, "record_option_mark", fake_record)
 
-    async with httpx.AsyncClient() as client:
-        result = await collector.refresh_due_option_marks(client)
+    async def run_case():
+        async with httpx.AsyncClient() as client:
+            return await collector.refresh_due_option_marks(client)
 
+    result = asyncio.run(run_case())
     assert result["marks_recorded"] == 2
     assert result["quoted_contracts"] == 1
     assert recorded == [(15, 2.4, "indicative"), (30, 2.4, "indicative")]
