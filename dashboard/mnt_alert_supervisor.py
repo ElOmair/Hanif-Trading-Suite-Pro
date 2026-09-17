@@ -8,6 +8,7 @@ from pathlib import Path
 import httpx
 
 from mnt_alert_worker import AlertState, _env_float, market_scan_active, scan_once
+from option_shadow_collector import refresh_due_option_marks
 from worker_health import build_worker_status, write_worker_status
 
 
@@ -36,6 +37,8 @@ async def run_forever() -> None:
             try:
                 if active:
                     results = await scan_once(client, state)
+                    option_marks = await refresh_due_option_marks(client)
+                    results.append({"stage": "option_marks", **option_marks})
                     print(
                         json.dumps(
                             {"time": _iso_now(), "results": results},
