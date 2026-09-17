@@ -5,6 +5,7 @@ import json
 import os
 
 from calibration_policy import build_calibration_policy
+from edge_slices import summarize_edge_slices
 from layer_calibration import summarize_layer_effectiveness
 from option_shadow_store import option_mark_summary
 from shadow_trade_store import shadow_trade_summary
@@ -41,6 +42,10 @@ def build_report(symbol: str | None = None, limit: int = 1000) -> dict:
         supportive_score=_env_float("MNT_LAYER_SUPPORTIVE_SCORE", 60.0),
         min_samples=_env_int("MNT_LAYER_MIN_SAMPLES", 10),
     )
+    edge_slices = summarize_edge_slices(
+        history,
+        min_samples=max(1, _env_int("MNT_EDGE_SLICE_MIN_SAMPLES", 8)),
+    )
     weight_challenge = walk_forward_weight_challenge(
         history,
         train_fraction=_env_float("MNT_WEIGHT_CHALLENGER_TRAIN_FRACTION", 0.70),
@@ -62,6 +67,7 @@ def build_report(symbol: str | None = None, limit: int = 1000) -> dict:
         "summary": summary,
         "policy": policy,
         "layer_effectiveness": layers,
+        "edge_slices": edge_slices,
         "weight_challenge": weight_challenge,
         "ready_alert_shadow_trades": shadow,
         "option_contract_shadow_returns": option_returns,
@@ -72,8 +78,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Print MnT outcome calibration, shadow threshold recommendations, "
-            "layer effectiveness, chronological weight challenges, READY-alert shadow results, "
-            "and actual option-contract quote returns."
+            "layer effectiveness, edge slices, chronological weight challenges, "
+            "READY-alert shadow results, and actual option-contract quote returns."
         )
     )
     parser.add_argument("--symbol", help="Optional ticker to calibrate separately, e.g. SPY")
