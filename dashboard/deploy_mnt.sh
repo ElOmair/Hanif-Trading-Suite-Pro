@@ -75,12 +75,7 @@ done
 }
 
 log "Running MnT preflight before starting unattended worker"
-set -a
-# shellcheck disable=SC1091
-source /home/airomair/Kronos/.env
-# shellcheck disable=SC1090
-source "${MNT_ENV_FILE}"
-set +a
+# mnt_preflight.py reads Kronos/.env and mnt.env as data; credential files are never executed as shell code.
 "${VENV_DIR}/bin/python" mnt_preflight.py
 
 log "Enabling and restarting alert supervisor"
