@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from schwab_contracts import rank_option_candidates
 from schwab_provider import begin_oauth, configured, exchange_code, option_chain, positions, quotes, token_status
 
 router = APIRouter(prefix="/api/schwab", tags=["schwab"])
@@ -42,7 +43,7 @@ def auth_url() -> dict[str, Any]:
 @router.get("/callback", response_class=HTMLResponse)
 async def callback(code: str = Query(...), state: str | None = Query(None)) -> HTMLResponse:
     try:
-        result = await exchange_code(code, state)
+        await exchange_code(code, state)
     except Exception as exc:
         raise _http_error(exc) from exc
     return HTMLResponse(
@@ -72,6 +73,47 @@ async def market_quotes(symbols: str = Query(..., min_length=1, max_length=300))
         raise HTTPException(status_code=400, detail="Maximum 50 symbols per quote request")
     try:
         return await quotes(requested)
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get("/options/{symbol}/candidates")
+async def option_candidates(
+    symbol: str,
+    direction: str = Query(..., pattern="^(LONG|SHORT)$"),
+    style: str = Query("auto", pattern="^(auto|intraday|0dte|day|swing|position)$"),
+    max_contract_cost: float = Query(300.0, gt=0, le=100000),
+    limit: int = Query(3, ge=1, le=10),
+    strike_count: int = Query(40, ge=5, le=100),
+    from_date: str | None = Query(None),
+    to_date: str | None = Query(None),
+) -> dict[str, Any]:
+    try:
+        raw = await option_chain(
+            symbol,
+            contractType="CALL" if direction == "LONG" else "PUT",
+            strikeCount=strike_count,
+            fromDate=from_date,
+            toDate=to_date,
+            includeUnderlyingQuote=True,
+        )
+        candidates = rank_option_candidates(
+            raw if isinstance(raw, dict) else {},
+            direction=direction,
+            max_contract_cost=max_contract_cost,
+            style=style,
+            limit=limit,
+        )
+        return {
+            "symbol": symbol.strip().upper(),
+            "direction": direction,
+            "style": style,
+            "max_contract_cost": max_contract_cost,
+            "provider": "schwab",
+            "candidates": candidates,
+            "candidate_count": len(candidates),
+            "research_only": True,
+        }
     except Exception as exc:
         raise _http_error(exc) from exc
 
