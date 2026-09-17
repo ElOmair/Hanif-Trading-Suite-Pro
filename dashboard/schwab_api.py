@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from schwab_contracts import rank_option_candidates
+from schwab_portfolio import build_symbol_context
 from schwab_provider import begin_oauth, configured, exchange_code, option_chain, positions, quotes, token_status
 
 router = APIRouter(prefix="/api/schwab", tags=["schwab"])
@@ -68,6 +69,22 @@ async def callback(code: str = Query(...), state: str | None = Query(None)) -> H
 async def account_positions() -> dict[str, Any]:
     try:
         return await positions()
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get("/portfolio/{symbol}/context")
+async def portfolio_context(
+    symbol: str,
+    direction: str | None = Query(None, pattern="^(LONG|SHORT)$"),
+) -> dict[str, Any]:
+    """Return browser-safe position awareness for one underlying symbol."""
+    try:
+        payload = await positions()
+        context = build_symbol_context(payload, symbol, intended_direction=direction)
+        context["provider"] = "schwab"
+        context["research_only"] = True
+        return context
     except Exception as exc:
         raise _http_error(exc) from exc
 
