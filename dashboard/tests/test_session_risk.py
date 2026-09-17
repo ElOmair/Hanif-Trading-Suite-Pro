@@ -7,13 +7,17 @@ def _trade(trade_id: int, created_at: str):
     return {"id": trade_id, "created_at": created_at}
 
 
-def _mark(mark_id: int, trade_id: int, value: float, horizon: int = 60):
-    return {
+def _mark(mark_id: int, trade_id: int, value: float, horizon: int = 60, lag: float = 1.0, quote_error: float | None = None):
+    row = {
         "id": mark_id,
         "shadow_trade_id": trade_id,
         "horizon_minutes": horizon,
+        "lag_minutes": lag,
         "return_bid_vs_entry_ask_pct": value,
     }
+    if quote_error is not None:
+        row["quote_horizon_error_minutes"] = quote_error
+    return row
 
 
 def test_ready_count_trips_advisory_but_does_not_block_by_default():
@@ -51,6 +55,7 @@ def test_three_consecutive_bad_option_marks_trip_risk():
     )
     assert result["tripped"] is True
     assert result["consecutive_bad_option_marks"] == 3
+    assert result["eligible_option_marks"] == 4
 
 
 def test_good_latest_mark_resets_consecutive_loss_streak():
@@ -65,6 +70,28 @@ def test_good_latest_mark_resets_consecutive_loss_streak():
     result = evaluate_session_risk(trades, marks, now=now, max_ready_alerts=20)
     assert result["tripped"] is False
     assert result["consecutive_bad_option_marks"] == 0
+
+
+def test_stale_quote_timing_cannot_trip_loss_streak():
+    now = datetime(2026, 9, 16, 18, 0, tzinfo=timezone.utc)
+    trades = [_trade(i, "2026-09-16T15:00:00+00:00") for i in range(1, 4)]
+    marks = [
+        _mark(1, 1, -35.0, quote_error=2.0),
+        _mark(2, 2, -40.0, quote_error=35.0),
+        _mark(3, 3, -45.0, quote_error=3.0),
+    ]
+    result = evaluate_session_risk(
+        trades,
+        marks,
+        now=now,
+        max_ready_alerts=20,
+        max_consecutive_bad_marks=3,
+        max_mark_timing_error_minutes=10,
+    )
+    assert result["eligible_option_marks"] == 2
+    assert result["ignored_timing_marks"] == 1
+    assert result["consecutive_bad_option_marks"] == 2
+    assert result["tripped"] is False
 
 
 def test_prior_day_trades_do_not_count_against_today():
