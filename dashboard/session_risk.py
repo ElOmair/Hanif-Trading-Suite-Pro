@@ -79,7 +79,9 @@ def evaluate_session_risk(
     for mark in marks:
         if int(mark.get("horizon_minutes") or 0) != int(loss_horizon_minutes):
             continue
-        if today_trade_ids and int(mark.get("shadow_trade_id") or -1) not in today_trade_ids:
+        # Only marks belonging to READY ideas created in today's ET session can
+        # influence today's breaker. With zero READY ideas today, zero marks count.
+        if int(mark.get("shadow_trade_id") or -1) not in today_trade_ids:
             continue
         value = mark.get("return_bid_vs_entry_ask_pct")
         try:
