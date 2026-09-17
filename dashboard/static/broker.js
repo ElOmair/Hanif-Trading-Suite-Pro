@@ -51,13 +51,70 @@
       $("accessExpiry").textContent = `Expires: ${dateText(status.access_expires_at)}`;
       $("refreshState").textContent = status.reauthorization_required ? "LOGIN DUE" : status.refresh_token_valid ? "VALID" : "—";
       $("refreshExpiry").textContent = `Refresh expires: ${dateText(status.refresh_expires_at)}`;
-      $("orderState").textContent = status.order_submission_enabled ? "ENABLED" : "DISABLED";
+      $("orderState").textContent = "DISABLED";
       $("connectButton").classList.toggle("hidden", !status.configured || connected);
       return connected;
     } catch (error) {
       $("connectionState").textContent = "ERROR";
       $("connectionNote").textContent = error.message;
       return false;
+    }
+  }
+
+  function stateClass(state) {
+    const value = String(state || '').toUpperCase();
+    if (value === 'HOLD') return 'positive';
+    if (value === 'TAKE_SOME_PROFIT') return 'positive';
+    if (value === 'REVIEW_EXIT') return 'negative';
+    if (value === 'PROTECT' || value === 'DO_NOT_ADD') return 'negative';
+    return '';
+  }
+
+  function stateLabel(state) {
+    return safe(state, 'REVIEW').replaceAll('_', ' ');
+  }
+
+  function renderReviews(payload) {
+    const rows = payload.reviews || [];
+    $("reviewStatus").textContent = rows.length
+      ? `${payload.attention_count || 0} need attention · ${rows.length} positions reviewed`
+      : 'No open positions to review';
+    if (!rows.length) {
+      $("positionReviews").innerHTML = '<div class="account"><p class="muted">No open positions were returned for review.</p></div>';
+      return;
+    }
+    $("positionReviews").innerHTML = rows.map((row) => {
+      const cls = stateClass(row.state);
+      const analyze = row.underlying ? `/?symbol=${encodeURIComponent(row.underlying)}#trades` : '/';
+      const openReturn = row.estimated_open_return_pct == null ? '—' : pct(row.estimated_open_return_pct);
+      const technical = row.technical_direction && row.technical_direction !== 'UNKNOWN' ? row.technical_direction : 'NO CURRENT DATA';
+      return `
+        <article class="account">
+          <div class="account-head">
+            <div><h3>${safe(row.symbol)}</h3><div class="muted">${safe(row.asset_type)} · ${safe(row.exposure_direction)} exposure</div></div>
+            <strong class="${cls}">${stateLabel(row.state)}</strong>
+          </div>
+          <div class="balances">
+            <span>Open return ${openReturn}</span>
+            <span>Open P/L ${money(row.open_profit_loss)}</span>
+            <span>Portfolio weight ${pct(row.concentration_pct)}</span>
+            <span>MnT direction ${technical}</span>
+          </div>
+          <p><strong>${safe(row.headline)}</strong></p>
+          <p class="muted">${safe(row.explanation)}</p>
+          <div class="actions"><a class="button" href="${analyze}">Open ${safe(row.underlying, 'trade')} analysis</a></div>
+        </article>`;
+    }).join('');
+  }
+
+  async function refreshReviews() {
+    $("reviewStatus").textContent = 'Reviewing…';
+    try {
+      const payload = await getJson('/api/schwab/portfolio/review');
+      renderReviews(payload);
+    } catch (error) {
+      $("reviewStatus").textContent = 'Unavailable';
+      $("positionReviews").innerHTML = `<div class="account"><p class="negative">${safe(error.message)}</p></div>`;
     }
   }
 
@@ -100,10 +157,15 @@
       const connected = await refreshStatus();
       if (!connected) {
         $("positionStatus").textContent = "Connect Schwab first";
+        $("reviewStatus").textContent = "Connect Schwab first";
         $("accounts").innerHTML = '<div class="account"><p class="muted">MnT is waiting for Schwab OAuth authorization.</p></div>';
+        $("positionReviews").innerHTML = '<div class="account"><p class="muted">Position-management guidance will appear after Schwab is connected.</p></div>';
         return;
       }
-      const payload = await getJson("/api/schwab/positions");
+      const [payload] = await Promise.all([
+        getJson("/api/schwab/positions"),
+        refreshReviews(),
+      ]);
       renderPositions(payload);
       $("positionStatus").textContent = `Updated ${new Date().toLocaleTimeString()}`;
     } catch (error) {
