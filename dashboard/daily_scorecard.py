@@ -7,7 +7,7 @@ from datetime import date, datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from option_shadow_store import list_option_marks
+from option_shadow_store import list_option_marks, mark_timing_error_minutes
 from shadow_trade_store import list_shadow_trades
 from signal_store import get_signal
 
@@ -72,9 +72,9 @@ def build_daily_scorecard(
             continue
         if int(mark.get("horizon_minutes") or 0) != int(option_horizon_minutes):
             continue
-        lag = _number(mark.get("lag_minutes"))
+        timing_error = mark_timing_error_minutes(mark)
         result = _number(mark.get("return_bid_vs_entry_ask_pct"))
-        if lag is None or result is None or lag > float(max_mark_lag_minutes):
+        if timing_error is None or result is None or timing_error > float(max_mark_lag_minutes):
             continue
         day_marks.append(mark)
 
@@ -98,6 +98,7 @@ def build_daily_scorecard(
             "return_pct": round(float(mark["return_bid_vs_entry_ask_pct"]), 2),
             "fusion_score": trade.get("fusion_score"),
             "coverage_pct": trade.get("coverage_pct"),
+            "timing_error_minutes": mark_timing_error_minutes(mark),
         }
 
     wins = losses = ambiguous = pending = 0
@@ -149,6 +150,7 @@ def build_daily_scorecard(
             "target_first_win_rate_pct": round(100.0 * wins / resolved, 1) if resolved else None,
         },
         "option_horizon_minutes": int(option_horizon_minutes),
+        "max_timing_error_minutes": float(max_mark_lag_minutes),
         "option_marks": {
             "count": len(returns),
             "positive_count": positive,
@@ -164,6 +166,7 @@ def build_daily_scorecard(
         "worst_option": mark_card(worst),
         "next_session_note": next_session,
         "return_convention": "entry at surfaced ask; later mark at bid",
+        "timing_convention": "source quote timestamp preferred; collector lag used only for legacy marks",
         "research_only": True,
     }
 
@@ -172,7 +175,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Print one MnT shadow-session scorecard.")
     parser.add_argument("--date", help="ET session date in YYYY-MM-DD; defaults to today")
     parser.add_argument("--horizon", type=int, default=60, help="Option mark horizon in minutes")
-    parser.add_argument("--max-lag", type=float, default=10.0, help="Ignore marks collected more than this many minutes late")
+    parser.add_argument("--max-lag", type=float, default=10.0, help="Ignore marks whose source quote timing differs from the horizon by more than this many minutes")
     args = parser.parse_args()
     print(
         json.dumps(
