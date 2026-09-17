@@ -21,7 +21,13 @@ def _http_error(exc: Exception) -> HTTPException:
 
 @router.get("/status")
 def status() -> dict[str, Any]:
-    return token_status()
+    payload = token_status()
+    # Phase 1 is deliberately read-only. Even if an environment value is changed,
+    # the public API must not imply that brokerage execution is available.
+    payload["order_submission_enabled"] = False
+    payload["phase"] = "READ_ONLY_PHASE_1"
+    payload["research_only"] = True
+    return payload
 
 
 @router.get("/authorize")
