@@ -158,9 +158,6 @@ def _store_tokens(payload: dict[str, Any], *, initial: bool) -> None:
     refresh = payload.get("refresh_token") or previous.get("refresh_token")
     refresh_expires_at = previous.get("refresh_expires_at")
     if initial or not refresh_expires_at:
-        # The interactive authorization establishes the roughly seven-day
-        # refresh-token window. Access-token refreshes must not silently restart
-        # this clock or MnT would miss the required reauthorization boundary.
         refresh_expires_at = now + 7 * 24 * 60 * 60
     stored = {
         "access_token": payload.get("access_token") or previous.get("access_token"),
@@ -258,10 +255,19 @@ async def positions() -> dict[str, Any]:
                     "asset_type": instrument.get("assetType"),
                     "long_quantity": position.get("longQuantity"),
                     "short_quantity": position.get("shortQuantity"),
+                    "settled_long_quantity": position.get("settledLongQuantity"),
+                    "settled_short_quantity": position.get("settledShortQuantity"),
                     "average_price": position.get("averagePrice"),
+                    "average_long_price": position.get("averageLongPrice"),
+                    "average_short_price": position.get("averageShortPrice"),
                     "market_value": position.get("marketValue"),
                     "current_day_profit_loss": position.get("currentDayProfitLoss"),
                     "current_day_profit_loss_pct": position.get("currentDayProfitLossPercentage"),
+                    "long_open_profit_loss": position.get("longOpenProfitLoss"),
+                    "short_open_profit_loss": position.get("shortOpenProfitLoss"),
+                    "unrealized_profit_loss": position.get("unrealizedProfitLoss"),
+                    "maintenance_requirement": position.get("maintenanceRequirement"),
+                    "current_day_cost": position.get("currentDayCost"),
                 }
             )
         balances = securities.get("currentBalances") or {}
@@ -275,6 +281,9 @@ async def positions() -> dict[str, Any]:
                     "cash_balance": balances.get("cashBalance"),
                     "available_funds": balances.get("availableFunds"),
                     "buying_power": balances.get("buyingPower"),
+                    "long_market_value": balances.get("longMarketValue"),
+                    "short_market_value": balances.get("shortMarketValue"),
+                    "account_value": balances.get("accountValue"),
                 },
             }
         )
