@@ -24,20 +24,25 @@ def test_optional_integrations_warn_but_do_not_block():
     assert report["verdict"] == "READY_FOR_SHADOW_SESSION"
 
 
+def _schwab_env(**overrides):
+    env = {
+        "ALPACA_API_KEY": "key",
+        "ALPACA_SECRET_KEY": "secret",
+        "KRONOS_API_URL": "http://127.0.0.1:8000",
+        "MNT_SIGNAL_DB_ENABLED": "true",
+        "MNT_SHADOW_TRADES_ENABLED": "true",
+        "MNT_SCHWAB_ENABLED": "true",
+        "SCHWAB_APP_KEY": "app-key",
+        "SCHWAB_APP_SECRET": "app-secret",
+        "SCHWAB_CALLBACK_URL": "https://dashboard.example/api/schwab/callback",
+        "MNT_SCHWAB_ORDER_SUBMISSION_ENABLED": "false",
+    }
+    env.update(overrides)
+    return env
+
+
 def test_enabled_schwab_requires_keys_secret_and_https_callback():
-    checks = configuration_checks(
-        {
-            "ALPACA_API_KEY": "key",
-            "ALPACA_SECRET_KEY": "secret",
-            "KRONOS_API_URL": "http://127.0.0.1:8000",
-            "MNT_SIGNAL_DB_ENABLED": "true",
-            "MNT_SHADOW_TRADES_ENABLED": "true",
-            "MNT_SCHWAB_ENABLED": "true",
-            "SCHWAB_APP_KEY": "app-key",
-            "SCHWAB_APP_SECRET": "app-secret",
-            "SCHWAB_CALLBACK_URL": "http://not-secure.example/callback",
-        }
-    )
+    checks = configuration_checks(_schwab_env(SCHWAB_CALLBACK_URL="http://not-secure.example/callback"))
     schwab = next(item for item in checks if item["name"] == "schwab_configuration")
     assert schwab["required"] is True
     assert schwab["ok"] is False
@@ -45,21 +50,19 @@ def test_enabled_schwab_requires_keys_secret_and_https_callback():
 
 
 def test_enabled_schwab_config_is_ready_with_https_callback():
-    checks = configuration_checks(
-        {
-            "ALPACA_API_KEY": "key",
-            "ALPACA_SECRET_KEY": "secret",
-            "KRONOS_API_URL": "http://127.0.0.1:8000",
-            "MNT_SIGNAL_DB_ENABLED": "true",
-            "MNT_SHADOW_TRADES_ENABLED": "true",
-            "MNT_SCHWAB_ENABLED": "true",
-            "SCHWAB_APP_KEY": "app-key",
-            "SCHWAB_APP_SECRET": "app-secret",
-            "SCHWAB_CALLBACK_URL": "https://dashboard.example/api/schwab/callback",
-        }
-    )
+    checks = configuration_checks(_schwab_env())
     schwab = next(item for item in checks if item["name"] == "schwab_configuration")
+    readonly = next(item for item in checks if item["name"] == "schwab_phase1_read_only")
     assert schwab["ok"] is True
+    assert readonly["ok"] is True
+
+
+def test_phase1_preflight_rejects_schwab_order_submission_flag():
+    checks = configuration_checks(_schwab_env(MNT_SCHWAB_ORDER_SUBMISSION_ENABLED="true"))
+    readonly = next(item for item in checks if item["name"] == "schwab_phase1_read_only")
+    assert readonly["required"] is True
+    assert readonly["ok"] is False
+    assert summarize(checks)["ready"] is False
 
 
 def test_required_failure_sets_not_ready():
