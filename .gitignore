@@ -6,11 +6,8 @@ venv/
 .env
 dashboard/.env
 dashboard/mnt.env
-dashboard/data/*.sqlite3
-dashboard/data/mnt_alert_state.json
-dashboard/data/mnt_worker_status.json
-dashboard/data/schwab_tokens.json
-dashboard/data/schwab_oauth_state.json
+# Local MnT runtime state: OAuth tokens, SQLite journals, worker heartbeats, scorecards, etc.
+dashboard/data/
 dashboard/static/mnt-runtime.json
 output/
 Hanif_Trading_Suite_Pro_Phase2/output/
