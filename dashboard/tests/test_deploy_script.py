@@ -16,6 +16,14 @@ def test_deploy_script_refuses_dirty_tree_by_default():
     assert "MNT_ALLOW_DIRTY_DEPLOY" in text
 
 
+def test_deploy_script_uses_mnt_only_override_not_full_env_example():
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "mnt.env.example" in text
+    assert 'MNT_ENV_FILE="${DASHBOARD_DIR}/mnt.env"' in text
+    assert "cp .env.example .env" not in text
+    assert "/home/airomair/Kronos/.env" in text
+
+
 def test_deploy_script_runs_preflight_before_worker_restart():
     text = SCRIPT.read_text(encoding="utf-8")
     preflight = text.index("mnt_preflight.py")
