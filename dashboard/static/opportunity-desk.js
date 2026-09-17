@@ -20,6 +20,104 @@
     return Math.sqrt(variance);
   }
 
+  function atrFromBars(bars, period = 14) {
+    if (!Array.isArray(bars) || bars.length < period + 2) return null;
+    const ranges = [];
+    for (let i = 1; i < bars.length; i += 1) {
+      const high = Number(bars[i].high);
+      const low = Number(bars[i].low);
+      const previousClose = Number(bars[i - 1].close);
+      if (![high, low, previousClose].every(Number.isFinite)) continue;
+      ranges.push(Math.max(high - low, Math.abs(high - previousClose), Math.abs(low - previousClose)));
+    }
+    const sample = ranges.slice(-period);
+    if (!sample.length) return null;
+    return sample.reduce((sum, value) => sum + value, 0) / sample.length;
+  }
+
+  function buildFastPlan(item, bars) {
+    if (!Array.isArray(bars) || bars.length < 20) return null;
+    const direction = String(item.direction || '').toUpperCase();
+    if (!['LONG', 'SHORT'].includes(direction)) return null;
+
+    const ordered = bars.slice().sort((a, b) => Number(a.time || 0) - Number(b.time || 0));
+    const atr = atrFromBars(ordered);
+    if (!Number.isFinite(atr) || atr <= 0) return null;
+
+    // Match the fast technical layer: use the six completed bars before the latest
+    // bar as the local structure trigger, then build a narrow ATR entry zone.
+    const prior = ordered.slice(-7, -1);
+    if (prior.length < 4) return null;
+    const highs = prior.map(row => Number(row.high)).filter(Number.isFinite);
+    const lows = prior.map(row => Number(row.low)).filter(Number.isFinite);
+    if (!highs.length || !lows.length) return null;
+
+    const trigger = direction === 'LONG' ? Math.max(...highs) : Math.min(...lows);
+    const entryLow = trigger - atr * 0.10;
+    const entryHigh = trigger + atr * 0.10;
+    const entryMid = (entryLow + entryHigh) / 2;
+    const noChase = direction === 'LONG' ? entryHigh + atr * 0.25 : entryLow - atr * 0.25;
+    const stop = direction === 'LONG' ? entryMid - atr : entryMid + atr;
+    const risk = Math.abs(entryMid - stop);
+    const target1 = direction === 'LONG' ? entryMid + risk * 1.5 : entryMid - risk * 1.5;
+    const target2 = direction === 'LONG' ? entryMid + risk * 2.5 : entryMid - risk * 2.5;
+    const current = Number(item.price);
+
+    let stateName = 'WATCH';
+    let stateLabel = '👀 WATCH';
+    let instruction = `Wait for ${fmtMoney(trigger)} before considering an entry.`;
+
+    if (Number.isFinite(current)) {
+      if (direction === 'LONG') {
+        if (current > noChase) {
+          stateName = 'NO_CHASE';
+          stateLabel = '⚠️ DO NOT CHASE';
+          instruction = `Price is already above the ${fmtMoney(noChase)} chase limit. Wait for a new setup or pullback.`;
+        } else if (current >= entryLow) {
+          stateName = 'TECHNICAL_TRIGGER';
+          stateLabel = '🟡 TECHNICAL TRIGGER MET';
+          instruction = `Price reached the preliminary entry area. Run the full MnT analysis before entering.`;
+        } else if (entryLow - current <= atr * 0.25) {
+          stateName = 'GET_READY';
+          stateLabel = '🟡 GET READY';
+          instruction = `Price is close to the trigger. Do not enter early; wait for ${fmtMoney(trigger)}.`;
+        }
+      } else {
+        if (current < noChase) {
+          stateName = 'NO_CHASE';
+          stateLabel = '⚠️ DO NOT CHASE';
+          instruction = `Price is already below the ${fmtMoney(noChase)} chase limit. Wait for a new setup or bounce.`;
+        } else if (current <= entryHigh) {
+          stateName = 'TECHNICAL_TRIGGER';
+          stateLabel = '🟡 TECHNICAL TRIGGER MET';
+          instruction = `Price reached the preliminary entry area. Run the full MnT analysis before entering.`;
+        } else if (current - entryHigh <= atr * 0.25) {
+          stateName = 'GET_READY';
+          stateLabel = '🟡 GET READY';
+          instruction = `Price is close to the trigger. Do not enter early; wait for ${fmtMoney(trigger)}.`;
+        }
+      }
+    }
+
+    return {
+      direction,
+      state: stateName,
+      stateLabel,
+      instruction,
+      trigger,
+      entryLow,
+      entryHigh,
+      noChase,
+      stop,
+      target1,
+      target2,
+      atr,
+      rr1: 1.5,
+      rr2: 2.5,
+      source: '5-minute structure + ATR',
+    };
+  }
+
   function analyzeDaily(symbol, bars) {
     if (!Array.isArray(bars) || bars.length < 80) return null;
     const closes = bars.map(bar => Number(bar.close)).filter(Number.isFinite);
@@ -118,7 +216,7 @@
       </div>
       <div class="mnt-opportunity-grid">
         <section class="mnt-lane">
-          <div class="mnt-lane-head"><h3>⚡ Fast trades</h3><p>Minutes to a few days. These are option setups worth watching, not automatic entries.</p></div>
+          <div class="mnt-lane-head"><h3>⚡ Fast trades</h3><p>Minutes to a few days. Each card now shows preliminary entry, stop, targets and a no-chase level. Full MnT confirmation is still required.</p></div>
           <div id="mntFastLane" class="mnt-lane-list"><div class="mnt-lane-empty">Loading short-term ideas…</div></div>
         </section>
         <section class="mnt-lane">
@@ -130,7 +228,7 @@
           <div id="mntHoldLane" class="mnt-lane-list"><div class="mnt-lane-empty">Checking longer-term trends…</div></div>
         </section>
       </div>
-      <div class="mnt-desk-note">Current v1 position scores use real Alpaca daily price/volume history. Fundamental quality, options flow and gamma are intentionally not guessed; those layers will only appear after real data feeds are connected.</div>
+      <div class="mnt-desk-note">Fast-trade prices are preliminary watch levels derived from recent real 5-minute bars and ATR, not an automatic entry signal. Opening a symbol runs the full MnT/Kronos confirmation workflow. Longer-term scores use real daily price/volume history; unavailable fundamentals, flow or gamma are not guessed.</div>
     `;
 
     const topbar = document.querySelector('.topbar');
@@ -147,17 +245,48 @@
       if (input) input.value = symbol;
       if (form) form.requestSubmit();
       document.querySelector('.chart-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (button.getAttribute('data-mnt-run-analysis') === 'true') {
+        setTimeout(() => document.getElementById('runFusion')?.click(), 650);
+      }
     });
     return shell;
+  }
+
+  function planHtml(plan) {
+    if (!plan) {
+      return '<div class="mnt-trade-plan mnt-plan-unavailable"><strong>Trade levels unavailable</strong><span>Open the symbol and run MnT analysis for a full setup.</span></div>';
+    }
+    const chaseWord = plan.direction === 'LONG' ? 'Do not chase above' : 'Do not chase below';
+    return `
+      <div class="mnt-trade-plan">
+        <div class="mnt-plan-head">
+          <div><span>WHAT SHOULD I DO?</span><strong>${plan.stateLabel}</strong></div>
+        </div>
+        <p class="mnt-plan-instruction">${plan.instruction}</p>
+        <div class="mnt-plan-grid">
+          <div><span>Wait for trigger</span><strong>${fmtMoney(plan.trigger)}</strong></div>
+          <div><span>Entry zone</span><strong>${fmtMoney(plan.entryLow)}–${fmtMoney(plan.entryHigh)}</strong></div>
+          <div><span>${chaseWord}</span><strong>${fmtMoney(plan.noChase)}</strong></div>
+          <div><span>Stop / invalidation</span><strong>${fmtMoney(plan.stop)}</strong></div>
+          <div><span>Profit target 1</span><strong>${fmtMoney(plan.target1)}</strong><small>${plan.rr1.toFixed(1)}R</small></div>
+          <div><span>Profit target 2</span><strong>${fmtMoney(plan.target2)}</strong><small>${plan.rr2.toFixed(1)}R</small></div>
+        </div>
+        <div class="mnt-plan-note">Preliminary ${plan.source}. Full MnT confirmation can cancel or refine these levels.</div>
+      </div>`;
   }
 
   function fastCard(item) {
     const direction = String(item.direction || '').toUpperCase();
     const isLong = direction === 'LONG';
     const option = isLong ? 'Call option watch' : 'Put option watch';
-    const action = Number(item.score) >= 86 && Number(item.rvol) >= 1.15
-      ? `Get ready — ${option.toLowerCase()}, but wait for the full MnT setup to confirm.`
-      : `Keep an eye on it — do not enter until the full setup confirms.`;
+    const plan = item.watchPlan || null;
+    const action = plan?.state === 'NO_CHASE'
+      ? plan.instruction
+      : plan?.state === 'TECHNICAL_TRIGGER'
+        ? 'Technical trigger reached — run full MnT analysis before entering.'
+        : Number(item.score) >= 86 && Number(item.rvol) >= 1.15
+          ? `Get ready — ${option.toLowerCase()}, but wait for the full MnT setup to confirm.`
+          : `Keep an eye on it — do not enter until the full setup confirms.`;
     const why = isLong
       ? 'Short-term buyers currently have the advantage.'
       : 'Short-term sellers currently have the advantage.';
@@ -172,7 +301,8 @@
           <div><span>Activity</span><strong>${Number(item.rvol || 0).toFixed(2)}× normal</strong></div>
           <div><span>Risk</span><strong>High / short-term</strong></div>
         </div>
-        <button class="mnt-open-idea" type="button" data-mnt-symbol="${item.symbol}">Open ${item.symbol} and analyze</button>
+        ${planHtml(plan)}
+        <button class="mnt-open-idea" type="button" data-mnt-symbol="${item.symbol}" data-mnt-run-analysis="true">Open ${item.symbol} and run full analysis</button>
       </article>`;
   }
 
@@ -191,7 +321,8 @@
           <div><span>Best fit</span><strong>Shares / 30–60D option watch</strong></div>
           <div><span>Risk</span><strong>${item.risk}</strong></div>
         </div>
-        <button class="mnt-open-idea" type="button" data-mnt-symbol="${item.symbol}">Open ${item.symbol}</button>
+        <div class="mnt-swing-watch"><span>Preferred watch area</span><strong>${fmtMoney(item.watchLow)}–${fmtMoney(item.watchHigh)}</strong><small>Open the symbol for a confirmed swing entry, stop and targets.</small></div>
+        <button class="mnt-open-idea" type="button" data-mnt-symbol="${item.symbol}" data-mnt-run-analysis="true">Open ${item.symbol} and run full analysis</button>
       </article>`;
   }
 
@@ -210,7 +341,7 @@
           <div><span>Watch area</span><strong>${fmtMoney(item.watchLow)}–${fmtMoney(item.watchHigh)}</strong></div>
           <div><span>Risk</span><strong>${item.risk}</strong></div>
         </div>
-        <button class="mnt-open-idea" type="button" data-mnt-symbol="${item.symbol}">Open ${item.symbol}</button>
+        <button class="mnt-open-idea" type="button" data-mnt-symbol="${item.symbol}" data-mnt-run-analysis="true">Open ${item.symbol} and run full analysis</button>
       </article>`;
   }
 
@@ -233,8 +364,14 @@
       const radar = await getJson('/api/radar?limit=12');
       const longs = Array.isArray(radar.longs) ? radar.longs : [];
       const shorts = Array.isArray(radar.shorts) ? radar.shorts : [];
-      const fast = [...longs.slice(0, 3), ...shorts.slice(0, 2)]
+      const fastBase = [...longs.slice(0, 3), ...shorts.slice(0, 2)]
         .sort((a, b) => Number(b.rank_score || b.score || 0) - Number(a.rank_score || a.score || 0));
+
+      const fastWithPlans = await mapLimit(fastBase, 3, async item => {
+        const payload = await getJson(`/api/bars/${encodeURIComponent(item.symbol)}?timeframe=5m&limit=80`);
+        return { ...item, watchPlan: buildFastPlan(item, payload.bars || []) };
+      });
+      const fast = fastWithPlans.map((result, index) => result?.error ? { ...fastBase[index], watchPlan: null } : result);
       renderList('mntFastLane', fast, fastCard, 'No strong short-term setup is standing out right now. Waiting is a valid trading decision.');
 
       const dailySymbols = [...new Set(longs.slice(0, 10).map(item => item.symbol))];
