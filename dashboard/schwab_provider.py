@@ -157,9 +157,10 @@ def _store_tokens(payload: dict[str, Any], *, initial: bool) -> None:
     now = _epoch_now()
     refresh = payload.get("refresh_token") or previous.get("refresh_token")
     refresh_expires_at = previous.get("refresh_expires_at")
-    if initial or payload.get("refresh_token"):
-        # Schwab Trader API refresh tokens are short-lived. Keep the issue time so
-        # the UI can warn before the interactive OAuth flow must be repeated.
+    if initial or not refresh_expires_at:
+        # The interactive authorization establishes the roughly seven-day
+        # refresh-token window. Access-token refreshes must not silently restart
+        # this clock or MnT would miss the required reauthorization boundary.
         refresh_expires_at = now + 7 * 24 * 60 * 60
     stored = {
         "access_token": payload.get("access_token") or previous.get("access_token"),
