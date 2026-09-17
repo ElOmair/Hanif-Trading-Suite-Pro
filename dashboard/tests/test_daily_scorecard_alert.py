@@ -89,3 +89,33 @@ def test_disabled_scorecard_does_not_send(monkeypatch):
     result = asyncio.run(alert.maybe_send_daily_scorecard(Client(), datetime(2026, 9, 17, 17, 0, tzinfo=ET)))
     assert result["status"] == "disabled"
     assert result["sent"] is False
+
+
+def test_no_activity_session_is_recorded_without_discord_and_not_retried(monkeypatch, tmp_path):
+    monkeypatch.setenv("MNT_EOD_SCORECARD_ENABLED", "true")
+    monkeypatch.setenv("MNT_DISCORD_WEBHOOK_URL", "https://discord.invalid/webhook")
+    monkeypatch.setenv("MNT_EOD_SCORECARD_HOUR_ET", "16")
+    monkeypatch.setenv("MNT_EOD_SCORECARD_MINUTE_ET", "15")
+    state_file = tmp_path / "scorecard-state.json"
+    monkeypatch.setenv("MNT_EOD_SCORECARD_STATE_FILE", str(state_file))
+    monkeypatch.setattr(
+        alert,
+        "build_daily_scorecard",
+        lambda *args, **kwargs: {"ready_ideas": 0, "option_marks": {"count": 0}},
+    )
+
+    class Client:
+        async def post(self, *args, **kwargs):
+            raise AssertionError("empty session must not send Discord")
+
+    import asyncio
+
+    when = datetime(2026, 9, 17, 16, 20, tzinfo=ET)
+    first = asyncio.run(alert.maybe_send_daily_scorecard(Client(), when))
+    assert first["status"] == "no_activity"
+    assert first["sent"] is False
+    saved = alert._load_state(state_file)
+    assert saved["last_sent_session_date"] == "2026-09-17"
+    assert saved["status"] == "no_activity"
+    due_again, _ = alert.due_for_delivery(when, saved)
+    assert due_again is False
