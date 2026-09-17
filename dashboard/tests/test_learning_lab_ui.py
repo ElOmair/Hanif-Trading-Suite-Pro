@@ -30,6 +30,10 @@ def test_learning_lab_surfaces_shadow_option_horizons_risk_and_learning_policy()
     assert "session_risk" in script
     assert "weight_challenge" in script
     assert "daily_scorecard" in script
+    assert "edge_slices" in script
+    assert "Measured edge" in script
+    assert "NO CLEAR SLICE" in script
+    assert "SUPPORTED" in script
     assert "KEEP CURRENT" in script
     assert "Today's quality" in script
     assert "shadow" in script.lower()
