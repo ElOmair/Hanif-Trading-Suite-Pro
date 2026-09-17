@@ -12,7 +12,7 @@ WorkingDirectory=/home/airomair/Hanif-Trading-Suite-Pro/dashboard
 EnvironmentFile=-/home/airomair/Kronos/.env
 EnvironmentFile=-/home/airomair/Hanif-Trading-Suite-Pro/dashboard/mnt.env
 Environment=KRONOS_API_URL=http://127.0.0.1:8000
-ExecStart=/home/airomair/kronos-venv/bin/uvicorn app:app --host 127.0.0.1 --port 8080
+ExecStart=/home/airomair/kronos-venv/bin/uvicorn app_schwab:app --host 127.0.0.1 --port 8080
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
