@@ -31,6 +31,7 @@ def build_worker_status(
     radar = next((item for item in results if item.get("stage") == "radar"), {})
     option_marks = next((item for item in results if item.get("stage") == "option_marks"), {})
     session_risk = next((item for item in results if item.get("stage") == "session_risk"), {})
+    daily_scorecard = next((item for item in results if item.get("stage") == "daily_scorecard"), {})
     symbol_rows = [item for item in results if item.get("symbol")]
 
     fusion_ok = sum(1 for item in symbol_rows if not item.get("error"))
@@ -68,6 +69,8 @@ def build_worker_status(
             "enforced": bool(session_risk.get("enforced")),
             "entry_review_blocked": bool(session_risk.get("entry_review_blocked")),
             "ready_ideas_today": session_risk.get("ready_ideas_today"),
+            "eligible_option_marks": session_risk.get("eligible_option_marks"),
+            "ignored_timing_marks": session_risk.get("ignored_timing_marks"),
             "consecutive_bad_option_marks": session_risk.get("consecutive_bad_option_marks"),
             "reasons": session_risk.get("reasons") or [],
         },
@@ -90,6 +93,15 @@ def build_worker_status(
             "discord_sent": discord_sent,
             "stand_down_sent": stand_downs,
             "suppressed_by_rank": suppressed,
+        },
+        "daily_scorecard": {
+            "status": daily_scorecard.get("status"),
+            "sent": bool(daily_scorecard.get("sent")),
+            "session_date_et": daily_scorecard.get("session_date_et"),
+            "quality_state": daily_scorecard.get("quality_state"),
+            "ready_ideas": daily_scorecard.get("ready_ideas"),
+            "option_marks": daily_scorecard.get("option_marks"),
+            "error": daily_scorecard.get("error"),
         },
         "shadow": {
             "ready_records_written": shadow_recorded,
