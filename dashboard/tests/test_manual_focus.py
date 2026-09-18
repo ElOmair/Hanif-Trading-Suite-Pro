@@ -11,15 +11,17 @@ def test_manual_focus_persists_and_prioritizes_open_positions(monkeypatch, tmp_p
 
     upsert_focus_item(symbol="AMD", kind="WATCHING", note="sector mover")
     upsert_focus_item(symbol="TSLA", kind="OPEN_OPTION", direction="LONG", entry_price=2.15, contract="TSLA 261016C00400000")
-    upsert_focus_item(symbol="NVDA", kind="OPEN_STOCK", direction="LONG", entry_price=185.0)
+    upsert_focus_item(symbol="NVDA", kind="OPEN_STOCK", direction="LONG", entry_price=185.0, shares=4)
 
     items = list_focus_items()
     assert [item["symbol"] for item in items] == ["TSLA", "NVDA", "AMD"]
     assert focus_symbols(limit=2) == ["TSLA", "NVDA"]
+    assert next(item for item in items if item["symbol"] == "NVDA")["shares"] == 4
     assert path.exists()
 
-    upsert_focus_item(symbol="AMD", kind="OPEN_STOCK", direction="LONG", entry_price=210.0)
+    upsert_focus_item(symbol="AMD", kind="OPEN_STOCK", direction="LONG", entry_price=210.0, shares=1.5)
     assert [item["symbol"] for item in list_focus_items()][0] == "AMD"
+    assert next(item for item in list_focus_items() if item["symbol"] == "AMD")["shares"] == 1.5
     assert remove_focus_item("NVDA") is True
     assert remove_focus_item("NVDA") is False
 
@@ -35,6 +37,12 @@ def test_manual_focus_rejects_invalid_values(monkeypatch, tmp_path):
     try:
         upsert_focus_item(symbol="SPY", kind="UNKNOWN")
         assert False, "invalid kind should fail"
+    except ValueError:
+        pass
+
+    try:
+        upsert_focus_item(symbol="NVDA", kind="OPEN_STOCK", entry_price=185.0)
+        assert False, "open stock should require share quantity"
     except ValueError:
         pass
 
