@@ -14,7 +14,8 @@ from option_position_manager import (
     option_spec_from_focus,
     underlying_price_from_chain,
 )
-from schwab_provider import option_chain
+from schwab_provider import option_chain, quotes
+from stock_position_manager import build_stock_position_analysis
 
 router = APIRouter(prefix="/api/mnt/focus", tags=["mnt-focus"])
 
@@ -24,6 +25,7 @@ class FocusItemRequest(BaseModel):
     kind: str = "WATCHING"
     direction: str = "AUTO"
     entry_price: float | None = Field(default=None, gt=0)
+    shares: float | None = Field(default=None, gt=0, le=1_000_000)
     contract: str | None = Field(default=None, max_length=80)
     option_type: str | None = Field(default=None, max_length=8)
     strike: float | None = Field(default=None, gt=0)
@@ -35,6 +37,21 @@ class FocusItemRequest(BaseModel):
 def _focus_item(symbol: str) -> dict[str, Any] | None:
     key = str(symbol or "").strip().upper()
     return next((item for item in list_focus_items() if str(item.get("symbol") or "").upper() == key), None)
+
+
+def _quote_for_symbol(payload: Any, symbol: str) -> dict[str, Any]:
+    target = str(symbol or "").strip().upper()
+    if isinstance(payload, dict):
+        direct = payload.get(target) or payload.get(target.lower())
+        if isinstance(direct, dict):
+            return direct
+        if str(payload.get("symbol") or "").upper() == target:
+            return payload
+    if isinstance(payload, list):
+        for row in payload:
+            if isinstance(row, dict) and str(row.get("symbol") or "").upper() == target:
+                return row
+    return {}
 
 
 @router.get("")
@@ -55,6 +72,51 @@ def save_focus(request: FocusItemRequest) -> dict[str, Any]:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"saved": True, "item": item, "research_only": True}
+
+
+@router.get("/{symbol}/stock-analysis")
+async def stock_position_analysis(
+    symbol: str,
+    deep: bool = Query(False, description="Run full Kronos/Fusion analysis in addition to the live stock quote."),
+) -> dict[str, Any]:
+    item = _focus_item(symbol)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Symbol is not in My Focus")
+    if str(item.get("kind") or "").upper() != "OPEN_STOCK":
+        raise HTTPException(status_code=400, detail="This My Focus item is not an open stock position")
+    if not item.get("entry_price") or not item.get("shares"):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Add your stock entry price and number of shares before MnT can manage this position.",
+                "missing_fields": [name for name in ("entry_price", "shares") if not item.get(name)],
+            },
+        )
+
+    target = str(item.get("symbol") or symbol).strip().upper()
+    try:
+        raw_quote = await quotes([target])
+        quote = _quote_for_symbol(raw_quote, target)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Schwab stock quote unavailable: {type(exc).__name__}: {exc}") from exc
+    if not quote:
+        raise HTTPException(status_code=404, detail="No live Schwab quote was returned for this stock position")
+
+    fusion_payload: dict[str, Any] | None = None
+    deep_error: str | None = None
+    if deep:
+        try:
+            fusion_payload = await kronos_fusion(target, max_contract_cost=None)
+        except Exception as exc:
+            deep_error = f"{type(exc).__name__}: {exc}"
+
+    analysis = build_stock_position_analysis(item, quote, fusion=fusion_payload)
+    analysis["deep_analysis_requested"] = deep
+    analysis["deep_analysis_available"] = fusion_payload is not None
+    if deep_error:
+        analysis["deep_analysis_error"] = deep_error
+        analysis["management"]["note"] += " Live stock management is still available, but the deeper Kronos thesis check failed on this request."
+    return analysis
 
 
 @router.get("/{symbol}/option-analysis")
@@ -94,8 +156,6 @@ async def option_position_analysis(
     chain_payload = chain if isinstance(chain, dict) else {}
     contract = find_exact_contract(chain_payload, spec)
     if contract is None:
-        # Some Schwab chain responses ignore exact-strike filtering around unusual
-        # roots. Retry a wider same-expiration chain before declaring it missing.
         try:
             chain = await option_chain(
                 spec["symbol"],
@@ -119,9 +179,6 @@ async def option_position_analysis(
     deep_error: str | None = None
     if deep:
         try:
-            # The current position is being analyzed, not selected. A generous cap
-            # avoids rejecting the existing contract simply because today's ask is
-            # above the normal new-trade budget.
             analysis_cap = max(1000.0, float(spec.get("entry_price") or 0.0) * 100.0 * 3.0)
             fusion_payload = await kronos_fusion(spec["symbol"], max_contract_cost=analysis_cap)
         except Exception as exc:
