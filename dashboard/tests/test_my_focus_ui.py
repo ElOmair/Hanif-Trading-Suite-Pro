@@ -40,6 +40,25 @@ def test_open_option_ui_captures_exact_position_and_live_management():
     assert 'recovery_needed_pct' in js
 
 
+def test_open_stock_ui_captures_shares_and_uses_same_position_manager_pattern():
+    js = (ROOT / "static" / "my-focus.js").read_text(encoding="utf-8")
+    assert 'mntFocusShares' in js
+    assert 'shares:' in js
+    assert '/stock-analysis' in js
+    assert 'data-focus-analyze-stock' in js
+    assert 'MnT STOCK POSITION MANAGER' in js
+    assert 'Unrealized P/L' in js
+    assert 'Structural invalidation' in js
+    assert 'price_checkpoint_10' in js
+
+
+def test_position_state_changes_can_raise_browser_alerts_when_enabled():
+    js = (ROOT / "static" / "my-focus.js").read_text(encoding="utf-8")
+    assert 'notifyStateChange' in js
+    assert 'Notification.permission' in js
+    assert 'mnt:position-state' in js
+
+
 def test_my_focus_submit_keeps_form_reference_across_await():
     js = (ROOT / "static" / "my-focus.js").read_text(encoding="utf-8")
     assert "const form = event.currentTarget;" in js
