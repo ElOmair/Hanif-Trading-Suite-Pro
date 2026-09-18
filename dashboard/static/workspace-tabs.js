@@ -1,10 +1,18 @@
 (() => {
   const TAB_KEY = 'mnt.workspace.active.v1';
   const tabs = ['trade', 'market', 'focus', 'ideas', 'portfolio', 'learning'];
+  const legacyHashTabs = {
+    trades: 'trade',
+    mntmyfocus: 'focus',
+    mntopportunityshell: 'ideas',
+    mntbrokerlive: 'portfolio',
+    mntlearninglab: 'learning',
+  };
 
   function normalize(name) {
     const value = String(name || '').toLowerCase();
-    return tabs.includes(value) ? value : 'trade';
+    if (tabs.includes(value)) return value;
+    return legacyHashTabs[value] || 'trade';
   }
 
   function moveDynamicShells() {
@@ -51,7 +59,7 @@
 
   function requestedInitialTab() {
     const rawHash = (location.hash || '').replace(/^#/, '').toLowerCase();
-    if (tabs.includes(rawHash)) return rawHash;
+    if (tabs.includes(rawHash) || legacyHashTabs[rawHash]) return normalize(rawHash);
     try {
       const saved = localStorage.getItem(TAB_KEY);
       if (saved && tabs.includes(saved)) return saved;
@@ -105,7 +113,7 @@
 
   window.addEventListener('hashchange', () => {
     const raw = (location.hash || '').replace(/^#/, '').toLowerCase();
-    if (tabs.includes(raw)) openTab(raw, { hash: false });
+    if (tabs.includes(raw) || legacyHashTabs[raw]) openTab(normalize(raw), { hash: false });
   });
 
   document.addEventListener('keydown', event => {
