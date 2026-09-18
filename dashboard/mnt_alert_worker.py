@@ -12,6 +12,7 @@ from datetime import datetime
 import httpx
 
 from alert_policy import build_discord_message, build_stand_down_message, classify_alert
+from manual_focus import list_focus_items
 from shadow_trade_store import record_ready_shadow_trade
 
 ET = ZoneInfo("America/New_York")
@@ -272,36 +273,45 @@ async def scan_once(client: httpx.AsyncClient, state: AlertState) -> list[dict[s
     cooldown = _env_float("MNT_ALERT_COOLDOWN_SECONDS", 900.0, 0.0)
     max_pretrigger_per_scan = _env_int("MNT_MAX_PRETRIGGER_ALERTS_PER_SCAN", 3, 0)
     max_ready_per_scan = _env_int("MNT_MAX_READY_ALERTS_PER_SCAN", 5, 0)
-    fusion_shortlist = _env_int("MNT_FUSION_SHORTLIST", 4, 1)
+    fusion_shortlist = _env_int("MNT_FUSION_SHORTLIST", 8, 1)
     sticky_limit = _env_int("MNT_STICKY_PRETRIGGER_LIMIT", 2, 0)
+    manual_limit = _env_int("MNT_MANUAL_FOCUS_SLOTS", 4, 0)
     max_contract_cost_raw = os.getenv("MNT_MAX_CONTRACT_COST", "300").strip()
     max_contract_cost = float(max_contract_cost_raw) if max_contract_cost_raw else None
+
     configured_symbols = _symbols()
-    sticky_symbols = state.active_pretrigger_symbols(configured_symbols, limit=sticky_limit)
+    manual_items = list_focus_items()[:manual_limit] if manual_limit else []
+    manual_symbols = [str(item.get("symbol") or "").upper() for item in manual_items if item.get("symbol")]
+    manual_by_symbol = {str(item.get("symbol") or "").upper(): item for item in manual_items if item.get("symbol")}
+    all_known_symbols = configured_symbols + [symbol for symbol in manual_symbols if symbol not in configured_symbols]
+    sticky_symbols = state.active_pretrigger_symbols(all_known_symbols, limit=sticky_limit)
+    priority_symbols = manual_symbols + [symbol for symbol in sticky_symbols if symbol not in manual_symbols]
 
     results: list[dict[str, Any]] = []
     alertable: list[dict[str, Any]] = []
     stand_downable: list[dict[str, Any]] = []
 
-    radar_slots = max(0, fusion_shortlist - len(sticky_symbols))
+    radar_slots = max(0, fusion_shortlist - len(priority_symbols))
     try:
         radar = await fetch_radar(client, base_url, limit=20)
         radar_symbols = shortlist_from_radar(radar, configured_symbols, limit=max(1, radar_slots)) if radar_slots else []
-        scan_symbols = sticky_symbols + [symbol for symbol in radar_symbols if symbol not in sticky_symbols]
+        scan_symbols = priority_symbols + [symbol for symbol in radar_symbols if symbol not in priority_symbols]
         scan_symbols = scan_symbols[:fusion_shortlist]
         radar_status = {
             "used": True,
             "cached": bool(radar.get("cached")),
             "stale": bool(radar.get("stale")),
+            "manual_focus": manual_symbols,
             "sticky_pretriggers": sticky_symbols,
             "shortlist": scan_symbols,
         }
     except Exception as exc:
-        fallback = [symbol for symbol in configured_symbols if symbol not in sticky_symbols]
-        scan_symbols = (sticky_symbols + fallback)[:fusion_shortlist]
+        fallback = [symbol for symbol in all_known_symbols if symbol not in priority_symbols]
+        scan_symbols = (priority_symbols + fallback)[:fusion_shortlist]
         radar_status = {
             "used": False,
             "error": type(exc).__name__,
+            "manual_focus": manual_symbols,
             "sticky_pretriggers": sticky_symbols,
             "shortlist": scan_symbols,
         }
@@ -316,10 +326,13 @@ async def scan_once(client: httpx.AsyncClient, state: AlertState) -> list[dict[s
                 pretrigger_score=pretrigger_score,
                 pretrigger_coverage=pretrigger_coverage,
             )
+            focus_item = manual_by_symbol.get(symbol)
             item = {
                 "symbol": symbol,
                 "classification": classification,
                 "payload": payload,
+                "manual_focus": focus_item is not None,
+                "focus_kind": focus_item.get("kind") if focus_item else None,
                 "sent": False,
                 "stand_down_sent": False,
                 "shadow_trade_id": None,
@@ -333,7 +346,13 @@ async def scan_once(client: httpx.AsyncClient, state: AlertState) -> list[dict[s
             else:
                 state.observe(symbol, classification)
         except Exception as exc:
-            results.append({"symbol": symbol, "error": type(exc).__name__, "sent": False})
+            results.append({
+                "symbol": symbol,
+                "manual_focus": symbol in manual_by_symbol,
+                "focus_kind": (manual_by_symbol.get(symbol) or {}).get("kind"),
+                "error": type(exc).__name__,
+                "sent": False,
+            })
 
     for item in stand_downable:
         if webhook:
