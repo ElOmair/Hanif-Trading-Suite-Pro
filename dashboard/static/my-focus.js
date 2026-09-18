@@ -107,7 +107,12 @@
 
   async function saveItem(event) {
     event.preventDefault();
-    const button = event.currentTarget.querySelector('button[type="submit"]');
+    const form = event.currentTarget;
+    const button = form?.querySelector('button[type="submit"]');
+    if (!form || !button) {
+      showMessage('My Focus form is unavailable. Refresh the page and try again.', true);
+      return;
+    }
     button.disabled = true;
     showMessage('');
     const entryRaw = document.getElementById('mntFocusEntry').value;
@@ -121,8 +126,8 @@
     };
     try {
       await requestJson('/api/mnt/focus', { method: 'POST', body: JSON.stringify(payload) });
-      event.currentTarget.reset();
-      document.getElementById('mntFocusKind').dispatchEvent(new Event('change'));
+      form.reset();
+      document.getElementById('mntFocusKind')?.dispatchEvent(new Event('change'));
       showMessage(`${payload.symbol} saved to My Focus.`);
       await load();
     } catch (error) {
