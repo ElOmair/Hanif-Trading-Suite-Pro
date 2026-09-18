@@ -98,13 +98,15 @@ async def latest_quote(symbol: str) -> dict[str, Any]:
     last = _number(_pick(quote, "lastPrice", "last", "closePrice")) or 0.0
     midpoint = (bid + ask) / 2.0 if bid > 0 and ask > 0 else 0.0
     mid = mark if mark > 0 else midpoint if midpoint > 0 else last if last > 0 else ask or bid
+    if mid <= 0:
+        raise RuntimeError(f"Schwab returned no usable quote for {target}")
     return {
         "symbol": target,
         "provider": "schwab",
         "quote": {
             "bid": bid,
             "ask": ask,
-            "mid": round(mid, 4) if mid else 0.0,
+            "mid": round(mid, 4),
             "last": last or None,
             "bid_size": _number(_pick(quote, "bidSize", "bid_size")) or 0.0,
             "ask_size": _number(_pick(quote, "askSize", "ask_size")) or 0.0,
