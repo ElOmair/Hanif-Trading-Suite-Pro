@@ -15,6 +15,7 @@
   <link rel="stylesheet" href="/static/unified-shell.css?v=20260918-0130" />
   <link rel="stylesheet" href="/static/my-focus.css?v=20260918-0600" />
   <link rel="stylesheet" href="/static/workspace-shell.css?v=20260918-0130" />
+  <link rel="stylesheet" href="/static/market-focus.css?v=20260918-0900" />
   <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body id="top">
@@ -116,15 +117,15 @@
 
     <section class="mnt-workspace-panel" data-mnt-panel="market" role="tabpanel" hidden>
       <div class="mnt-tab-heading">
-        <div><div class="mnt-tab-kicker">Discovery</div><h2>Market</h2><p>Start here when you want to see what is moving. Radar is the fast filter; opening a ticker takes you straight to Trade Desk for full Kronos analysis.</p></div>
+        <div><div class="mnt-tab-kicker">Discovery</div><h2>Market</h2><p>Start here to see where money is moving. Focus Mode ranks sector leadership and sends only the most relevant names to deeper Kronos review.</p></div>
       </div>
       <div class="mnt-market-layout">
-        <div class="mnt-market-callout">Next phase: this workspace becomes the sector/mover Focus Mode — SPX, SPY, QQQ, Mag 7 and the strongest movers inside the sectors actually leading or lagging that day.</div>
+        <div id="mntMarketFocusHost"><div class="panel"><div class="muted">Market Focus Mode loads when you open this tab.</div></div></div>
         <aside class="panel radar-panel">
-          <div class="panel-title-row"><div><div class="eyebrow">LIVE DISCOVERY</div><h2>Market Radar</h2></div><button id="refreshRadar" class="ghost-button">Refresh</button></div>
+          <div class="panel-title-row"><div><div class="eyebrow">BROAD BACKUP VIEW</div><h2>Market Radar</h2></div><button id="refreshRadar" class="ghost-button">Refresh</button></div>
           <div class="radar-section"><h3>Long candidates</h3><div id="longRadar" class="radar-list"><div class="muted">Loading…</div></div></div>
           <div class="radar-section"><h3>Short candidates</h3><div id="shortRadar" class="radar-list"><div class="muted">Loading…</div></div></div>
-          <p class="fineprint">Radar is a fast technical pre-filter. A radar row is not an entry signal.</p>
+          <p class="fineprint">Broad radar remains visible as a backup discovery view. Focus Mode is what drives the unattended Kronos shortlist.</p>
         </aside>
       </div>
     </section>
@@ -182,6 +183,7 @@
   <script src="/static/setup-journal.js?v=20260918-0130"></script>
   <script src="/static/portfolio-panel.js?v=20260918-0130"></script>
   <script src="/static/my-focus.js?v=20260918-0600"></script>
+  <script src="/static/market-focus.js?v=20260918-0900"></script>
   <script src="/static/opportunity-desk.js?v=20260918-0130"></script>
   <script src="/static/fundamental-holds.js?v=20260918-0130"></script>
   <script src="/static/learning-lab.js?v=20260918-0130"></script>
