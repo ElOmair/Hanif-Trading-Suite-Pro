@@ -297,6 +297,18 @@ async def quotes(symbols: list[str]) -> Any:
     return await api_get("/quotes", market_data=True, params={"symbols": ",".join(cleaned)})
 
 
+async def price_history(symbol: str, **filters: Any) -> Any:
+    params: dict[str, Any] = {"symbol": symbol.strip().upper()}
+    allowed = {
+        "periodType", "period", "frequencyType", "frequency", "startDate", "endDate",
+        "needExtendedHoursData", "needPreviousClose",
+    }
+    for key, value in filters.items():
+        if key in allowed and value not in (None, ""):
+            params[key] = value
+    return await api_get("/pricehistory", market_data=True, params=params)
+
+
 async def option_chain(symbol: str, **filters: Any) -> Any:
     params: dict[str, Any] = {"symbol": symbol.strip().upper()}
     allowed = {
