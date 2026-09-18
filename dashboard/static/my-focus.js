@@ -55,9 +55,13 @@
       <div id="mntFocusMessage" class="mnt-focus-message"></div>
       <div id="mntFocusList" class="mnt-focus-list"><div class="mnt-focus-empty">Loading your focus list…</div></div>
     `;
-    const nav = document.querySelector('.mnt-nav');
-    if (nav?.parentNode) nav.parentNode.insertBefore(shell, nav.nextSibling);
-    else document.body.prepend(shell);
+    const workspaceHost = document.getElementById('mntFocusHost');
+    if (workspaceHost) workspaceHost.appendChild(shell);
+    else {
+      const nav = document.querySelector('.mnt-nav');
+      if (nav?.parentNode) nav.parentNode.insertBefore(shell, nav.nextSibling);
+      else document.body.prepend(shell);
+    }
 
     const kind = shell.querySelector('#mntFocusKind');
     const contract = shell.querySelector('#mntFocusContract');
@@ -87,12 +91,15 @@
       const open = event.target.closest('[data-focus-open]');
       if (open) {
         const symbol = open.dataset.focusOpen;
-        const input = document.getElementById('symbolInput');
-        const form = document.getElementById('symbolForm');
-        if (input) input.value = symbol;
-        if (form) form.requestSubmit();
-        document.querySelector('.chart-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        setTimeout(() => document.getElementById('runFusion')?.click(), 700);
+        window.MnTWorkspace?.openTab('trade');
+        setTimeout(() => {
+          const input = document.getElementById('symbolInput');
+          const form = document.getElementById('symbolForm');
+          if (input) input.value = symbol;
+          if (form) form.requestSubmit();
+          document.querySelector('.chart-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          setTimeout(() => document.getElementById('runFusion')?.click(), 600);
+        }, 80);
       }
     });
     return shell;
