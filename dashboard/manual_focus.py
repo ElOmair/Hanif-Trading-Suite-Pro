@@ -57,6 +57,7 @@ def _normalize(
     kind: str = "WATCHING",
     direction: str = "AUTO",
     entry_price: float | None = None,
+    shares: float | None = None,
     contract: str | None = None,
     option_type: str | None = None,
     strike: float | None = None,
@@ -82,6 +83,17 @@ def _normalize(
         parsed_entry = float(entry_price)
         if parsed_entry <= 0:
             raise ValueError("Entry price must be positive")
+
+    parsed_shares: float | None = None
+    if kind == "OPEN_STOCK":
+        if shares not in (None, ""):
+            parsed_shares = float(shares)
+            if parsed_shares <= 0 or parsed_shares > 1_000_000:
+                raise ValueError("Shares must be greater than 0")
+        if parsed_entry is None:
+            raise ValueError("Open stock positions require an entry price")
+        if parsed_shares is None:
+            raise ValueError("Open stock positions require the number of shares")
 
     contract_text = str(contract or "").strip().upper()[:80] or None
     note_text = str(note or "").strip()[:240] or None
@@ -127,6 +139,7 @@ def _normalize(
         "kind": kind,
         "direction": direction,
         "entry_price": parsed_entry,
+        "shares": parsed_shares if kind == "OPEN_STOCK" else None,
         "contract": contract_text if kind == "OPEN_OPTION" else None,
         "option_type": normalized_option_type if kind == "OPEN_OPTION" else None,
         "strike": parsed_strike if kind == "OPEN_OPTION" else None,
@@ -163,6 +176,7 @@ def upsert_focus_item(
     kind: str = "WATCHING",
     direction: str = "AUTO",
     entry_price: float | None = None,
+    shares: float | None = None,
     contract: str | None = None,
     option_type: str | None = None,
     strike: float | None = None,
@@ -181,6 +195,7 @@ def upsert_focus_item(
             kind=kind,
             direction=direction,
             entry_price=entry_price,
+            shares=shares,
             contract=contract,
             option_type=option_type,
             strike=strike,
