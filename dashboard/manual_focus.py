@@ -11,6 +11,7 @@ from typing import Any
 SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
 VALID_KINDS = {"WATCHING", "OPEN_STOCK", "OPEN_OPTION"}
 VALID_DIRECTIONS = {"AUTO", "LONG", "SHORT"}
+VALID_OPTION_TYPES = {"CALL", "PUT"}
 _LOCK = threading.Lock()
 ROOT = Path(__file__).resolve().parent
 
@@ -57,6 +58,10 @@ def _normalize(
     direction: str = "AUTO",
     entry_price: float | None = None,
     contract: str | None = None,
+    option_type: str | None = None,
+    strike: float | None = None,
+    expiration: str | None = None,
+    quantity: int | None = None,
     note: str | None = None,
     existing: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -80,6 +85,41 @@ def _normalize(
 
     contract_text = str(contract or "").strip().upper()[:80] or None
     note_text = str(note or "").strip()[:240] or None
+
+    normalized_option_type: str | None = None
+    parsed_strike: float | None = None
+    normalized_expiration: str | None = None
+    parsed_quantity: int | None = None
+    if kind == "OPEN_OPTION":
+        raw_type = str(option_type or "").strip().upper()
+        if raw_type:
+            if raw_type in {"C", "CALLS"}:
+                raw_type = "CALL"
+            elif raw_type in {"P", "PUTS"}:
+                raw_type = "PUT"
+            if raw_type not in VALID_OPTION_TYPES:
+                raise ValueError("Option type must be CALL or PUT")
+            normalized_option_type = raw_type
+
+        if strike not in (None, ""):
+            parsed_strike = float(strike)
+            if parsed_strike <= 0:
+                raise ValueError("Option strike must be positive")
+
+        if expiration not in (None, ""):
+            raw_expiration = str(expiration).strip()
+            try:
+                normalized_expiration = datetime.strptime(raw_expiration, "%Y-%m-%d").date().isoformat()
+            except ValueError as exc:
+                raise ValueError("Option expiration must use YYYY-MM-DD") from exc
+
+        if quantity not in (None, ""):
+            parsed_quantity = int(quantity)
+            if parsed_quantity < 1 or parsed_quantity > 100:
+                raise ValueError("Option quantity must be between 1 and 100")
+        else:
+            parsed_quantity = 1
+
     now = datetime.now(timezone.utc).isoformat()
     previous = existing or {}
     return {
@@ -88,6 +128,10 @@ def _normalize(
         "direction": direction,
         "entry_price": parsed_entry,
         "contract": contract_text if kind == "OPEN_OPTION" else None,
+        "option_type": normalized_option_type if kind == "OPEN_OPTION" else None,
+        "strike": parsed_strike if kind == "OPEN_OPTION" else None,
+        "expiration": normalized_expiration if kind == "OPEN_OPTION" else None,
+        "quantity": parsed_quantity if kind == "OPEN_OPTION" else None,
         "note": note_text,
         "added_at": previous.get("added_at") or now,
         "updated_at": now,
@@ -120,6 +164,10 @@ def upsert_focus_item(
     direction: str = "AUTO",
     entry_price: float | None = None,
     contract: str | None = None,
+    option_type: str | None = None,
+    strike: float | None = None,
+    expiration: str | None = None,
+    quantity: int | None = None,
     note: str | None = None,
 ) -> dict[str, Any]:
     symbol_key = str(symbol or "").strip().upper()
@@ -134,6 +182,10 @@ def upsert_focus_item(
             direction=direction,
             entry_price=entry_price,
             contract=contract,
+            option_type=option_type,
+            strike=strike,
+            expiration=expiration,
+            quantity=quantity,
             note=note,
             existing=existing,
         )
