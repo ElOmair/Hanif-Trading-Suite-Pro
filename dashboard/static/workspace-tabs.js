@@ -7,7 +7,20 @@
     return tabs.includes(value) ? value : 'trade';
   }
 
+  function moveDynamicShells() {
+    const mounts = [
+      ['mntMyFocus', 'mntFocusHost'],
+      ['mntOpportunityShell', 'mntOpportunityHost'],
+    ];
+    for (const [shellId, hostId] of mounts) {
+      const shell = document.getElementById(shellId);
+      const host = document.getElementById(hostId);
+      if (shell && host && shell.parentElement !== host) host.appendChild(shell);
+    }
+  }
+
   function openTab(name, options = {}) {
+    moveDynamicShells();
     const target = normalize(name);
     document.querySelectorAll('[data-mnt-panel]').forEach(panel => {
       const active = panel.dataset.mntPanel === target;
@@ -37,8 +50,8 @@
   }
 
   function requestedInitialTab() {
-    const hash = normalize((location.hash || '').replace(/^#/, ''));
-    if (location.hash && tabs.includes((location.hash || '').replace(/^#/, '').toLowerCase())) return hash;
+    const rawHash = (location.hash || '').replace(/^#/, '').toLowerCase();
+    if (tabs.includes(rawHash)) return rawHash;
     try {
       const saved = localStorage.getItem(TAB_KEY);
       if (saved && tabs.includes(saved)) return saved;
@@ -76,7 +89,18 @@
     if (analyze) {
       event.preventDefault();
       openCurrentTrade(true);
+      return;
     }
+
+    // Existing modules already know how to load their symbol. This layer only
+    // makes sure the destination workspace is visible before their action completes.
+    if (event.target.closest('.radar-row, [data-mnt-symbol], [data-underlying]')) {
+      openTab('trade');
+    }
+  });
+
+  document.addEventListener('submit', event => {
+    if (event.target?.id === 'symbolForm') openTab('trade');
   });
 
   window.addEventListener('hashchange', () => {
@@ -92,9 +116,14 @@
     openTab(tabs[index]);
   });
 
-  // Trade is visible in the HTML by default so Lightweight Charts can initialize
-  // with real dimensions. Restore the user's last workspace after startup.
-  const init = () => setTimeout(() => openTab(requestedInitialTab(), { hash: false }), 0);
+  const init = () => {
+    moveDynamicShells();
+    const observer = new MutationObserver(moveDynamicShells);
+    observer.observe(document.body, { childList: true, subtree: true });
+    // Trade is visible in HTML so Lightweight Charts gets real startup dimensions.
+    setTimeout(() => openTab(requestedInitialTab(), { hash: false }), 0);
+  };
+
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
 })();
