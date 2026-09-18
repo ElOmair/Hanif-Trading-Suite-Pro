@@ -40,16 +40,29 @@
     if (ok === false) el.classList.add('bad');
   }
 
+  function providerLabel(provider) {
+    const value = String(provider || '').toLowerCase();
+    if (value === 'schwab') return 'Schwab primary';
+    if (value === 'mixed') return 'Mixed feed';
+    if (value.includes('alpaca_sip')) return 'Alpaca SIP fallback';
+    if (value.includes('alpaca_iex')) return 'Alpaca IEX fallback';
+    return provider ? String(provider) : 'Market data unavailable';
+  }
+
   async function loadSystem() {
     try {
       const res = await fetch('/api/system');
       const data = await res.json();
-      setStatus('alpacaStatus', data.alpaca.configured ? 'Alpaca online' : 'Alpaca missing', data.alpaca.configured);
+      const market = data.market_data || {};
+      const active = market.active_provider || (data.alpaca?.feed ? `alpaca_${data.alpaca.feed}` : 'unavailable');
+      const fallbackReady = Boolean(market.fallback?.configured ?? data.alpaca?.configured);
+      setStatus('alpacaStatus', fallbackReady ? 'Fallback ready' : 'Fallback missing', fallbackReady);
       setStatus('kronosStatus', data.kronos.online ? 'Kronos online' : 'Kronos offline', data.kronos.online);
-      setStatus('feedStatus', `${String(data.alpaca.feed).toUpperCase()} feed`, true);
+      setStatus('feedStatus', providerLabel(active), active !== 'unavailable' && !market.degraded);
       document.getElementById('kronosAnalysisState').textContent = data.kronos.online ? 'Online' : 'Offline';
     } catch (_) {
-      setStatus('alpacaStatus', 'Dashboard API offline', false);
+      setStatus('alpacaStatus', 'Fallback unknown', false);
+      setStatus('feedStatus', 'Market data offline', false);
       setStatus('kronosStatus', 'Kronos unknown', false);
     }
   }
@@ -260,6 +273,7 @@
     const res = await fetch(`/api/bars/${encodeURIComponent(state.symbol)}?timeframe=${encodeURIComponent(state.timeframe)}&limit=400`);
     if (!res.ok) throw new Error(await res.text() || `HTTP ${res.status}`);
     const data = await res.json();
+    if (data.provider) setStatus('feedStatus', providerLabel(data.provider), data.provider === 'schwab' && !data.fallback);
     candles.setData(data.bars.map(b => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close })));
     volume.setData(data.bars.map(b => ({ time: b.time, value: b.volume, color: volumeColor(b) })));
     ema9Series.setData(ema(data.bars, 9));
@@ -285,6 +299,7 @@
       state.radar.set(row.symbol, row);
       const button = document.createElement('button');
       button.className = `radar-row ${side}`;
+      button.title = `Market data: ${providerLabel(row.provider)}`;
       button.innerHTML = `<span><strong>${row.symbol}</strong><br><small>${row.momentum_30m_pct}% · RVOL ${row.rvol}</small></span><span>$${Number(row.price).toFixed(2)}</span><span class="score">${row.score}</span>`;
       button.addEventListener('click', () => selectSymbol(row.symbol));
       container.appendChild(button);
@@ -301,6 +316,7 @@
       state.radar.clear();
       renderRadarList('longRadar', data.longs, 'long');
       renderRadarList('shortRadar', data.shorts, 'short');
+      if (data.feed) setStatus('feedStatus', providerLabel(data.feed), data.feed === 'schwab');
       if (state.radar.has(state.symbol)) {
         const radar = state.radar.get(state.symbol);
         state.currentAnalysis = { ...(state.currentAnalysis || {}), ...radar };
@@ -323,6 +339,7 @@
       if (socket !== state.socket) return;
       const msg = JSON.parse(event.data);
       if (msg.symbol !== state.symbol) return;
+      if (msg.provider) setStatus('feedStatus', providerLabel(msg.provider), msg.provider === 'schwab' && !msg.fallback);
       if (msg.quote) {
         const price = msg.quote.mid || msg.quote.ask || msg.quote.bid;
         if (price) document.getElementById('lastPrice').textContent = `$${Number(price).toFixed(2)}`;
@@ -370,5 +387,8 @@
   selectSymbol('SPY');
   setInterval(loadSystem, 30000);
   setInterval(loadRadar, 60000);
-  setInterval(() => { if (state.timeframe !== '1m') loadBars().catch(() => {}); }, 15000);
+  // Schwab live quotes arrive through the websocket. Re-fetch candles every 15s
+  // for every timeframe so 1-minute bars remain current without polling price
+  // history every second.
+  setInterval(() => loadBars().catch(() => {}), 15000);
 })();
