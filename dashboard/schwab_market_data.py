@@ -1,22 +1,24 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from schwab_provider import configured, price_history, quotes, token_status
 
 
-_TIMEFRAME_REQUESTS: dict[str, tuple[str, int, str, int]] = {
-    "1m": ("day", 10, "minute", 1),
-    "5m": ("day", 10, "minute", 5),
-    "15m": ("day", 10, "minute", 15),
-    "30m": ("day", 10, "minute", 30),
-    # Schwab's price-history minute frequencies top out below a native one-hour
-    # candle on some app entitlements. Request 30m and combine two bars locally.
-    "1h": ("day", 10, "minute", 30),
-    "1d": ("year", 2, "daily", 1),
+# Schwab intraday price history is requested with explicit start/end timestamps so
+# the current trading session is included reliably. Daily candles can use a fixed
+# period because they are not sensitive to the in-progress session boundary.
+_INTRADAY_REQUESTS: dict[str, tuple[int, int]] = {
+    "1m": (1, 10),
+    "5m": (5, 10),
+    "15m": (15, 30),
+    "30m": (30, 45),
+    # Build 1-hour candles from Schwab's 30-minute candles locally.
+    "1h": (30, 45),
 }
+_SUPPORTED_TIMEFRAMES = {*_INTRADAY_REQUESTS, "1d"}
 
 
 def _number(value: Any) -> float | None:
@@ -168,21 +170,41 @@ def _aggregate_hourly(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return output
 
 
+def _history_filters(timeframe: str, now: datetime | None = None) -> dict[str, Any]:
+    key = timeframe.strip().lower()
+    if key not in _SUPPORTED_TIMEFRAMES:
+        raise ValueError(f"Unsupported Schwab timeframe: {timeframe}")
+    if key == "1d":
+        return {
+            "periodType": "year",
+            "period": 2,
+            "frequencyType": "daily",
+            "frequency": 1,
+            "needExtendedHoursData": True,
+            "needPreviousClose": True,
+        }
+
+    frequency, lookback_days = _INTRADAY_REQUESTS[key]
+    end = now or datetime.now(timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    start = end - timedelta(days=lookback_days)
+    return {
+        "periodType": "day",
+        "frequencyType": "minute",
+        "frequency": frequency,
+        "startDate": int(start.timestamp() * 1000),
+        "endDate": int(end.timestamp() * 1000),
+        "needExtendedHoursData": True,
+        "needPreviousClose": True,
+    }
+
+
 async def bars(symbol: str, timeframe: str, limit: int = 400) -> dict[str, Any]:
     target = symbol.strip().upper()
     key = timeframe.strip().lower()
-    if key not in _TIMEFRAME_REQUESTS:
-        raise ValueError(f"Unsupported Schwab timeframe: {timeframe}")
-    period_type, period, frequency_type, frequency = _TIMEFRAME_REQUESTS[key]
-    raw = await price_history(
-        target,
-        periodType=period_type,
-        period=period,
-        frequencyType=frequency_type,
-        frequency=frequency,
-        needExtendedHoursData=True,
-        needPreviousClose=True,
-    )
+    filters = _history_filters(key)
+    raw = await price_history(target, **filters)
     rows = _candle_rows(raw)
     if key == "1h":
         rows = _aggregate_hourly(rows)
