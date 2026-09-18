@@ -68,5 +68,5 @@ def test_my_focus_submit_keeps_form_reference_across_await():
 
 def test_my_focus_asset_has_cache_bust_version():
     html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-    assert 'my-focus.js?v=20260918-0300' in html
-    assert 'my-focus.css?v=20260918-0300' in html
+    assert 'my-focus.js?v=20260918-0600' in html
+    assert 'my-focus.css?v=20260918-0600' in html
