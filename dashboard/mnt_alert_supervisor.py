@@ -11,6 +11,7 @@ from daily_scorecard_alert import maybe_send_daily_scorecard
 from learning_snapshot import write_learning_snapshot
 from mnt_alert_worker import AlertState, _env_float, market_scan_active, scan_once
 from option_shadow_collector import refresh_due_option_marks
+from position_state_alerts import PositionAlertState, refresh_position_alerts
 from session_risk import session_risk_status
 from worker_health import build_worker_status, write_worker_status
 
@@ -30,6 +31,13 @@ async def run_forever() -> None:
         )
     )
     state = AlertState(state_path)
+    position_state_path = Path(
+        os.getenv(
+            "MNT_POSITION_ALERT_STATE_FILE",
+            str(Path(__file__).resolve().parent / "data" / "mnt_position_alert_state.json"),
+        )
+    )
+    position_state = PositionAlertState(position_state_path)
 
     async with httpx.AsyncClient(timeout=20.0) as client:
         while True:
@@ -51,10 +59,28 @@ async def run_forever() -> None:
                                 "beginner_explanation": risk.get("beginner_explanation"),
                             }
                         )
+
                     # Existing READY shadow trades keep receiving option marks even
                     # when new alert delivery is paused by the optional risk governor.
                     option_marks = await refresh_due_option_marks(client)
                     results.append({"stage": "option_marks", **option_marks})
+
+                    # Managed positions are monitored independently of fresh-entry
+                    # alert gating. The first observation only establishes a baseline;
+                    # Discord is used when a position's management state changes.
+                    try:
+                        position_alerts = await refresh_position_alerts(client, position_state)
+                        results.append({"stage": "position_alerts", **position_alerts})
+                    except Exception as position_exc:
+                        results.append(
+                            {
+                                "stage": "position_alerts",
+                                "status": "error",
+                                "checked": 0,
+                                "sent": 0,
+                                "error": type(position_exc).__name__,
+                            }
+                        )
 
                 # This is evaluated on every supervisor loop, including after-hours,
                 # so a scorecard configured for 16:15 ET is not dependent on the
