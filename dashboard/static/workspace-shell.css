@@ -1,0 +1,400 @@
+/* MnT workstation shell: keep navigation/action context visible and show one job at a time. */
+:root {
+  --mnt-header-height: 70px;
+  --mnt-nav-height: 52px;
+}
+
+body {
+  overflow-x: hidden;
+}
+
+.topbar.mnt-command-bar {
+  min-height: var(--mnt-header-height);
+  height: auto;
+  padding: 10px 18px;
+  display: grid;
+  grid-template-columns: auto minmax(240px, 430px) auto 1fr;
+  gap: 14px;
+  align-items: center;
+  top: 0;
+  z-index: 80;
+}
+
+.mnt-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 145px;
+}
+
+.mnt-brand-mark {
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  display: grid;
+  place-items: center;
+  font-weight: 900;
+  letter-spacing: -.04em;
+  color: #dff3ff;
+  border: 1px solid rgba(77, 182, 255, .35);
+  background: linear-gradient(145deg, rgba(77,182,255,.22), rgba(37,99,235,.08));
+  box-shadow: inset 0 0 20px rgba(77,182,255,.06);
+}
+
+.mnt-brand-copy strong {
+  display: block;
+  font-size: 14px;
+  line-height: 1.1;
+}
+
+.mnt-brand-copy span {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.mnt-command-symbol {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  min-width: 0;
+}
+
+.mnt-command-symbol .symbol-form {
+  flex: 1;
+  min-width: 0;
+}
+
+.mnt-command-symbol .symbol-form input {
+  width: 100%;
+  min-width: 90px;
+  height: 38px;
+  font-size: 15px;
+}
+
+.mnt-command-symbol .symbol-form button,
+.mnt-analyze-button {
+  min-height: 38px;
+  border-radius: 9px;
+  padding: 7px 12px;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.mnt-analyze-button {
+  color: #eaf6ff;
+  border: 1px solid rgba(77,182,255,.5);
+  background: linear-gradient(180deg, rgba(37,99,235,.28), rgba(30,64,175,.18));
+  white-space: nowrap;
+}
+
+.mnt-command-quote {
+  min-width: 145px;
+  display: grid;
+  grid-template-columns: auto auto;
+  column-gap: 8px;
+  row-gap: 1px;
+  align-items: baseline;
+  font-variant-numeric: tabular-nums;
+}
+
+.mnt-command-quote #activeSymbol {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.mnt-command-quote #lastPrice {
+  font-size: 19px;
+}
+
+.mnt-command-quote #spreadText {
+  grid-column: 1 / -1;
+  font-size: 9px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.topbar .system-status {
+  min-width: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  justify-content: flex-end;
+  scrollbar-width: none;
+}
+
+.topbar .system-status::-webkit-scrollbar { display: none; }
+.topbar .system-status .pill { white-space: nowrap; }
+
+.mnt-nav.mnt-workspace-nav {
+  top: var(--mnt-header-height);
+  z-index: 70;
+  min-height: var(--mnt-nav-height);
+  padding: 8px 18px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  background: rgba(5, 12, 22, .94);
+  box-shadow: 0 10px 28px rgba(0,0,0,.16);
+}
+
+.mnt-workspace-nav::-webkit-scrollbar { display: none; }
+
+.mnt-workspace-nav button[data-mnt-tab] {
+  appearance: none;
+  border: 1px solid transparent;
+  color: #8fa6b9;
+  background: transparent;
+  border-radius: 9px;
+  padding: 8px 13px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.mnt-workspace-nav button[data-mnt-tab]:hover {
+  color: #d8ebf8;
+  background: rgba(148,163,184,.07);
+}
+
+.mnt-workspace-nav button[data-mnt-tab].active {
+  color: #eaf7ff;
+  border-color: rgba(77,182,255,.33);
+  background: rgba(77,182,255,.12);
+  box-shadow: inset 0 -2px rgba(77,182,255,.62);
+}
+
+.mnt-workspace-nav .broker-link {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.mnt-workspace-shell {
+  width: min(1600px, 100%);
+  margin: 0 auto;
+  padding: 14px;
+}
+
+.mnt-workspace-panel {
+  display: none;
+  min-width: 0;
+}
+
+.mnt-workspace-panel.is-active {
+  display: block;
+  animation: mnt-panel-in .16s ease-out;
+}
+
+@keyframes mnt-panel-in {
+  from { opacity: .35; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+
+.mnt-tab-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin: 4px 2px 12px;
+}
+
+.mnt-tab-heading h2 {
+  font-size: 19px;
+  margin-top: 2px;
+}
+
+.mnt-tab-heading p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin-top: 5px;
+  max-width: 720px;
+}
+
+.mnt-tab-kicker {
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+}
+
+/* Trade Desk */
+.mnt-trade-layout {
+  display: grid;
+  gap: 12px;
+}
+
+.mnt-trade-layout .chart-panel {
+  min-height: 610px;
+}
+
+.mnt-trade-layout #chart {
+  height: 500px;
+}
+
+.mnt-trade-layout .chart-toolbar {
+  justify-content: space-between;
+}
+
+.mnt-toolbar-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-right: auto;
+}
+
+.mnt-toolbar-label strong { font-size: 13px; }
+.mnt-toolbar-label span { color: var(--muted); font-size: 10px; }
+
+.mnt-trade-layout .lower-grid {
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, .9fr);
+}
+
+/* Market workspace */
+.mnt-market-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.mnt-market-layout .radar-panel {
+  height: auto;
+  min-height: 420px;
+  position: static;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.mnt-market-layout .radar-panel .panel-title-row,
+.mnt-market-layout .radar-panel .fineprint {
+  grid-column: 1 / -1;
+}
+
+.mnt-market-layout .radar-section + .radar-section { margin-top: 0; }
+
+.mnt-market-callout {
+  padding: 13px 14px;
+  border: 1px solid rgba(77,182,255,.16);
+  border-radius: 12px;
+  background: rgba(77,182,255,.045);
+  color: #9fb5c6;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* Dedicated tabs should not inherit old full-page placement rules. */
+#mmtFocusHost,
+#mntFocusHost,
+#mntOpportunityHost { min-width: 0; }
+
+#mntFocusHost .mnt-focus-shell,
+#mntOpportunityHost .mnt-opportunity-shell,
+.mnt-workspace-panel .mnt-learning-shell {
+  margin: 0;
+  width: 100%;
+}
+
+.mnt-workspace-panel .positions-card {
+  min-height: 420px;
+  resize: none;
+  overflow: visible;
+}
+
+.mnt-portfolio-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.mnt-shortcut-hint {
+  color: #60788a;
+  font-size: 9px;
+  white-space: nowrap;
+  align-self: center;
+}
+
+@media (max-width: 1100px) {
+  :root { --mnt-header-height: 112px; }
+  .topbar.mnt-command-bar {
+    grid-template-columns: auto minmax(220px, 1fr) auto;
+  }
+  .topbar .system-status {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+  .mnt-trade-layout .lower-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 700px) {
+  :root { --mnt-header-height: 136px; --mnt-nav-height: 50px; }
+
+  .topbar.mnt-command-bar {
+    padding: 9px 10px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .mnt-brand { min-width: 0; }
+  .mnt-brand-mark { width: 32px; height: 32px; border-radius: 9px; }
+  .mnt-brand-copy strong { font-size: 13px; }
+  .mnt-brand-copy span { display: none; }
+
+  .mnt-command-quote {
+    min-width: 112px;
+    justify-self: end;
+  }
+  .mnt-command-quote #lastPrice { font-size: 17px; }
+
+  .mnt-command-symbol {
+    grid-column: 1 / -1;
+    order: 3;
+  }
+
+  .topbar .system-status {
+    grid-column: 1 / -1;
+    order: 4;
+    justify-content: flex-start;
+    gap: 5px;
+  }
+
+  .topbar .system-status .pill {
+    padding: 4px 7px;
+    font-size: 9px;
+  }
+
+  .mnt-nav.mnt-workspace-nav {
+    padding: 7px 8px;
+    gap: 3px;
+  }
+
+  .mnt-workspace-nav button[data-mnt-tab] {
+    padding: 7px 10px;
+    font-size: 11px;
+  }
+
+  .mnt-workspace-nav .broker-link,
+  .mnt-shortcut-hint { display: none; }
+
+  .mnt-workspace-shell { padding: 8px; }
+  .mnt-tab-heading { margin: 4px 2px 9px; }
+  .mnt-tab-heading h2 { font-size: 17px; }
+
+  .mnt-trade-layout .chart-panel { min-height: 520px; }
+  .mnt-trade-layout #chart { height: 405px; min-height: 340px; }
+  .mnt-toolbar-label { width: 100%; }
+
+  .mnt-market-layout .radar-panel {
+    grid-template-columns: 1fr;
+    padding: 12px;
+  }
+  .mnt-market-layout .radar-panel .panel-title-row,
+  .mnt-market-layout .radar-panel .fineprint { grid-column: auto; }
+
+  .mnt-tab-heading p { font-size: 11px; }
+}

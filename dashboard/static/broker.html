@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MnT Broker Desk</title>
+  <link rel="stylesheet" href="/static/broker.css?v=20260917-0330">
+  <link rel="stylesheet" href="/static/unified-shell.css?v=20260917-0330">
+</head>
+<body id="top">
+  <nav class="mnt-nav" aria-label="MnT sections">
+    <a href="/">Home</a>
+    <a href="/#trades">Trades</a>
+    <a href="/#mntOpportunityShell">Invest / Holds</a>
+    <a class="active broker-link" href="/broker">Portfolio / Broker</a>
+    <a href="/#mntLearningLab">Learning</a>
+  </nav>
+
+  <main class="shell">
+    <header>
+      <div>
+        <div class="eyebrow">MnT LOGIC · BROKER DATA</div>
+        <h1>Schwab / thinkorswim Broker Desk</h1>
+        <p>Read-only account awareness, position management guidance, and Schwab-backed option candidate research.</p>
+      </div>
+      <a class="back" href="/">← Main dashboard</a>
+    </header>
+
+    <section class="notice">
+      <strong>Research mode:</strong> MnT can read connected account/market data here, but this page cannot submit, replace, or cancel brokerage orders.
+    </section>
+
+    <section class="grid status-grid">
+      <article class="card">
+        <span>Connection</span><strong id="connectionState">Checking…</strong><small id="connectionNote"></small>
+      </article>
+      <article class="card">
+        <span>Access token</span><strong id="accessState">—</strong><small id="accessExpiry"></small>
+      </article>
+      <article class="card">
+        <span>Reauthorization</span><strong id="refreshState">—</strong><small id="refreshExpiry"></small>
+      </article>
+      <article class="card danger-safe">
+        <span>Order submission</span><strong id="orderState">DISABLED</strong><small>No order routes are exposed in this phase.</small>
+      </article>
+    </section>
+
+    <section class="actions">
+      <a id="connectButton" class="button primary hidden" href="/api/schwab/authorize">Connect Schwab</a>
+      <button id="refreshPositions" class="button">Refresh positions</button>
+    </section>
+
+    <section>
+      <div class="section-head"><div><div class="eyebrow">MNT POSITION MANAGER</div><h2>What needs attention?</h2></div><span id="reviewStatus">Waiting</span></div>
+      <div id="positionReviews" class="accounts"><div class="account"><p class="muted">Connect Schwab to let MnT review your existing positions.</p></div></div>
+    </section>
+
+    <section>
+      <div class="section-head"><div><div class="eyebrow">LIVE ACCOUNT VIEW</div><h2>Positions</h2></div><span id="positionStatus">Waiting</span></div>
+      <div id="accounts" class="accounts"></div>
+    </section>
+
+    <section class="scanner">
+      <div class="section-head"><div><div class="eyebrow">SCHWAB OPTION CHAIN</div><h2>Contract Candidates</h2></div><span>Ask × 100 ≤ budget</span></div>
+      <form id="candidateForm" class="form-grid">
+        <label>Symbol<input id="symbol" value="SPY" maxlength="10" autocomplete="off"></label>
+        <label>Direction<select id="direction"><option value="LONG">LONG / Calls</option><option value="SHORT">SHORT / Puts</option></select></label>
+        <label>Style<select id="style"><option value="intraday">Intraday</option><option value="swing" selected>Swing</option><option value="auto">Auto</option></select></label>
+        <label>Max contract $<input id="budget" type="number" value="300" min="1" step="25"></label>
+        <button class="button primary" type="submit">Scan Schwab chain</button>
+      </form>
+      <div id="candidateStatus" class="muted"></div>
+      <div id="candidates" class="table-wrap"></div>
+    </section>
+  </main>
+  <script src="/static/broker.js?v=20260917-0330"></script>
+</body>
+</html>

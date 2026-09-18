@@ -1,6 +1,6 @@
 [Unit]
-Description=Hanif Trading Suite Dashboard
-After=network-online.target kronos-api.service
+Description=MnT Unattended Market Alert Worker
+After=network-online.target hanif-dashboard.service
 Wants=network-online.target
 
 [Service]
@@ -11,8 +11,7 @@ WorkingDirectory=/home/airomair/Hanif-Trading-Suite-Pro/dashboard
 # Shared credentials/settings remain authoritative; MnT-only settings may override below.
 EnvironmentFile=-/home/airomair/Kronos/.env
 EnvironmentFile=-/home/airomair/Hanif-Trading-Suite-Pro/dashboard/mnt.env
-Environment=KRONOS_API_URL=http://127.0.0.1:8000
-ExecStart=/home/airomair/kronos-venv/bin/uvicorn app_schwab:app --host 127.0.0.1 --port 8080
+ExecStart=/home/airomair/kronos-venv/bin/python /home/airomair/Hanif-Trading-Suite-Pro/dashboard/mnt_alert_supervisor.py
 Restart=always
 RestartSec=5
 NoNewPrivileges=true

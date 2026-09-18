@@ -5,5 +5,9 @@ __pycache__/
 venv/
 .env
 dashboard/.env
+dashboard/mnt.env
+# Local MnT runtime state: OAuth tokens, SQLite journals, worker heartbeats, scorecards, etc.
+dashboard/data/
+dashboard/static/mnt-runtime.json
 output/
 Hanif_Trading_Suite_Pro_Phase2/output/
