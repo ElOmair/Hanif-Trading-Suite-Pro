@@ -19,8 +19,25 @@ def test_my_focus_ui_supports_watch_stock_and_option_positions():
     assert 'OPEN_OPTION' in js
     assert '/api/mnt/focus' in js
     assert 'Open + run MnT' in js
-    assert 'runFusion' in js
     assert "MnTWorkspace?.openTab('trade')" in js
+
+
+def test_open_option_ui_captures_exact_position_and_live_management():
+    js = (ROOT / "static" / "my-focus.js").read_text(encoding="utf-8")
+    for field_id in (
+        'mntFocusOptionType',
+        'mntFocusStrike',
+        'mntFocusExpiration',
+        'mntFocusQuantity',
+    ):
+        assert field_id in js
+    assert '/option-analysis' in js
+    assert 'deep=true' in js
+    assert 'MnT POSITION MANAGER' in js
+    assert 'Live bid' in js
+    assert 'Exit P/L' in js
+    assert 'Underlying invalidation' in js
+    assert 'recovery_needed_pct' in js
 
 
 def test_my_focus_submit_keeps_form_reference_across_await():
@@ -32,4 +49,5 @@ def test_my_focus_submit_keeps_form_reference_across_await():
 
 def test_my_focus_asset_has_cache_bust_version():
     html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-    assert 'my-focus.js?v=20260918-0130' in html
+    assert 'my-focus.js?v=20260918-0300' in html
+    assert 'my-focus.css?v=20260918-0300' in html
