@@ -31,6 +31,31 @@
     return 'WATCHING';
   }
 
+  function stateClass(state) {
+    const value = String(state || '').toUpperCase();
+    if (['WORKING', 'PROTECT_PROFIT', 'TAKE_PROFIT'].includes(value)) return 'good';
+    if (['UNDER_PRESSURE', 'TIME_RISK'].includes(value)) return 'caution';
+    if (['RISK_OFF', 'EXIT_REVIEW'].includes(value)) return 'danger';
+    return 'neutral';
+  }
+
+  function notifyStateChange(symbol, kind, management) {
+    const state = String(management?.state || '').toUpperCase();
+    if (!state) return;
+    const key = `mnt.position.state.${symbol}.${kind}`;
+    let previous = null;
+    try { previous = localStorage.getItem(key); } catch (_) {}
+    if (previous && previous !== state && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      try {
+        new Notification(`${symbol}: ${state.replaceAll('_', ' ')}`, {
+          body: management?.headline || management?.next_step || 'MnT position state changed.',
+        });
+      } catch (_) {}
+    }
+    try { localStorage.setItem(key, state); } catch (_) {}
+    window.dispatchEvent(new CustomEvent('mnt:position-state', { detail: { symbol, kind, state, management } }));
+  }
+
   function ensurePanel() {
     let shell = document.getElementById('mntMyFocus');
     if (shell) return shell;
@@ -42,7 +67,7 @@
         <div>
           <div class="eyebrow">YOUR PRIORITY LIST</div>
           <h2>My Focus</h2>
-          <p class="muted">Add names you found yourself or positions you already hold. Open options become managed positions using your real fill and live Schwab option data.</p>
+          <p class="muted">Watching names stay in the Kronos queue. Open stock and option positions get live P/L, key levels, and position-management guidance based on your actual entry.</p>
         </div>
         <span class="mnt-focus-badge">UP TO 4 PRIORITY SCAN SLOTS</span>
       </div>
@@ -58,9 +83,12 @@
           <option value="LONG">Long / bullish</option>
           <option value="SHORT">Short / bearish</option>
         </select>
-        <input id="mntFocusEntry" type="number" min="0" step="0.01" placeholder="Entry / reference $" aria-label="Entry or reference price" />
+        <input id="mntFocusEntry" type="number" min="0" step="0.0001" placeholder="Entry / reference $" aria-label="Entry or reference price" />
         <input id="mntFocusNote" maxlength="240" placeholder="Why you're watching it (optional)" aria-label="Note" />
         <button type="submit">Add / update</button>
+        <div id="mntStockFields" class="mnt-focus-position-fields" hidden>
+          <input id="mntFocusShares" type="number" min="0.0001" max="1000000" step="0.0001" placeholder="Shares" aria-label="Number of shares" />
+        </div>
         <div id="mntOptionFields" class="mnt-focus-option-fields" hidden>
           <select id="mntFocusOptionType" aria-label="Option type">
             <option value="CALL">Call</option>
@@ -75,6 +103,7 @@
       <div id="mntFocusMessage" class="mnt-focus-message"></div>
       <div id="mntFocusList" class="mnt-focus-list"><div class="mnt-focus-empty">Loading your focus list…</div></div>
     `;
+
     const workspaceHost = document.getElementById('mntFocusHost');
     if (workspaceHost) workspaceHost.appendChild(shell);
     else {
@@ -85,73 +114,36 @@
 
     const kind = shell.querySelector('#mntFocusKind');
     const entry = shell.querySelector('#mntFocusEntry');
+    const stockFields = shell.querySelector('#mntStockFields');
+    const shares = shell.querySelector('#mntFocusShares');
     const optionFields = shell.querySelector('#mntOptionFields');
     const optionType = shell.querySelector('#mntFocusOptionType');
     const strike = shell.querySelector('#mntFocusStrike');
     const expiration = shell.querySelector('#mntFocusExpiration');
     const quantity = shell.querySelector('#mntFocusQuantity');
-    const syncOptionState = () => {
-      const show = kind.value === 'OPEN_OPTION';
-      optionFields.hidden = !show;
-      entry.placeholder = show ? 'Premium paid (e.g. 2.35)' : 'Entry / reference $';
-      entry.required = show;
+
+    const syncPositionFields = () => {
+      const openStock = kind.value === 'OPEN_STOCK';
+      const openOption = kind.value === 'OPEN_OPTION';
+      stockFields.hidden = !openStock;
+      optionFields.hidden = !openOption;
+      entry.placeholder = openOption ? 'Premium paid (e.g. 2.35)' : openStock ? 'Average stock entry $' : 'Entry / reference $';
+      entry.required = openStock || openOption;
+      shares.disabled = !openStock;
+      shares.required = openStock;
       for (const el of [optionType, strike, expiration, quantity]) {
-        el.disabled = !show;
-        el.required = show;
+        el.disabled = !openOption;
+        el.required = openOption;
       }
-      if (!show) shell.querySelector('#mntFocusContract').value = '';
+      shell.querySelector('#mntFocusContract').disabled = !openOption;
+      if (!openStock) shares.value = '';
+      if (!openOption) shell.querySelector('#mntFocusContract').value = '';
     };
-    kind.addEventListener('change', syncOptionState);
-    syncOptionState();
+    kind.addEventListener('change', syncPositionFields);
+    syncPositionFields();
 
     shell.querySelector('#mntFocusForm').addEventListener('submit', saveItem);
-    shell.addEventListener('click', async event => {
-      const remove = event.target.closest('[data-focus-remove]');
-      if (remove) {
-        remove.disabled = true;
-        try {
-          await requestJson(`/api/mnt/focus/${encodeURIComponent(remove.dataset.focusRemove)}`, { method: 'DELETE' });
-          await load();
-        } catch (error) {
-          showMessage(error.message, true);
-          remove.disabled = false;
-        }
-        return;
-      }
-
-      const analyze = event.target.closest('[data-focus-analyze-option]');
-      if (analyze) {
-        const symbol = analyze.dataset.focusAnalyzeOption;
-        const host = document.querySelector(`[data-option-analysis-host="${CSS.escape(symbol)}"]`);
-        analyze.disabled = true;
-        analyze.textContent = 'Analyzing…';
-        if (host) host.innerHTML = '<div class="mnt-option-manager-loading">Running Kronos + live option review…</div>';
-        try {
-          const data = await requestJson(`/api/mnt/focus/${encodeURIComponent(symbol)}/option-analysis?deep=true`);
-          if (host) host.innerHTML = optionManagerHtml(data, true);
-        } catch (error) {
-          if (host) host.innerHTML = `<div class="mnt-option-manager-error">${safe(error.message)}</div>`;
-        } finally {
-          analyze.disabled = false;
-          analyze.textContent = 'Analyze position';
-        }
-        return;
-      }
-
-      const open = event.target.closest('[data-focus-open]');
-      if (open) {
-        const symbol = open.dataset.focusOpen;
-        window.MnTWorkspace?.openTab('trade');
-        setTimeout(() => {
-          const input = document.getElementById('symbolInput');
-          const form = document.getElementById('symbolForm');
-          if (input) input.value = symbol;
-          if (form) form.requestSubmit();
-          document.querySelector('.chart-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          if (open.dataset.runFusion === 'true') setTimeout(() => document.getElementById('runFusion')?.click(), 600);
-        }, 80);
-      }
-    });
+    shell.addEventListener('click', handleClick);
     return shell;
   }
 
@@ -170,11 +162,14 @@
       showMessage('My Focus form is unavailable. Refresh the page and try again.', true);
       return;
     }
+
     button.disabled = true;
     showMessage('');
     const kind = document.getElementById('mntFocusKind').value;
+    const openStock = kind === 'OPEN_STOCK';
     const openOption = kind === 'OPEN_OPTION';
     const entryRaw = document.getElementById('mntFocusEntry').value;
+    const sharesRaw = document.getElementById('mntFocusShares').value;
     const strikeRaw = document.getElementById('mntFocusStrike').value;
     const quantityRaw = document.getElementById('mntFocusQuantity').value;
     const payload = {
@@ -182,6 +177,7 @@
       kind,
       direction: document.getElementById('mntFocusDirection').value,
       entry_price: entryRaw ? Number(entryRaw) : null,
+      shares: openStock && sharesRaw ? Number(sharesRaw) : null,
       contract: openOption ? document.getElementById('mntFocusContract').value.trim() || null : null,
       option_type: openOption ? document.getElementById('mntFocusOptionType').value : null,
       strike: openOption && strikeRaw ? Number(strikeRaw) : null,
@@ -189,6 +185,7 @@
       quantity: openOption && quantityRaw ? Number(quantityRaw) : null,
       note: document.getElementById('mntFocusNote').value.trim() || null,
     };
+
     try {
       await requestJson('/api/mnt/focus', { method: 'POST', body: JSON.stringify(payload) });
       form.reset();
@@ -203,6 +200,66 @@
     }
   }
 
+  async function handleClick(event) {
+    const remove = event.target.closest('[data-focus-remove]');
+    if (remove) {
+      remove.disabled = true;
+      try {
+        await requestJson(`/api/mnt/focus/${encodeURIComponent(remove.dataset.focusRemove)}`, { method: 'DELETE' });
+        await load();
+      } catch (error) {
+        showMessage(error.message, true);
+        remove.disabled = false;
+      }
+      return;
+    }
+
+    const analyzeOption = event.target.closest('[data-focus-analyze-option]');
+    if (analyzeOption) {
+      await analyzeManagedPosition(analyzeOption, 'option');
+      return;
+    }
+
+    const analyzeStock = event.target.closest('[data-focus-analyze-stock]');
+    if (analyzeStock) {
+      await analyzeManagedPosition(analyzeStock, 'stock');
+      return;
+    }
+
+    const open = event.target.closest('[data-focus-open]');
+    if (open) {
+      const symbol = open.dataset.focusOpen;
+      window.MnTWorkspace?.openTab('trade');
+      setTimeout(() => {
+        const input = document.getElementById('symbolInput');
+        const form = document.getElementById('symbolForm');
+        if (input) input.value = symbol;
+        if (form) form.requestSubmit();
+        document.querySelector('.chart-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        if (open.dataset.runFusion === 'true') setTimeout(() => document.getElementById('runFusion')?.click(), 600);
+      }, 80);
+    }
+  }
+
+  async function analyzeManagedPosition(button, type) {
+    const symbol = type === 'option' ? button.dataset.focusAnalyzeOption : button.dataset.focusAnalyzeStock;
+    const hostSelector = type === 'option' ? `[data-option-analysis-host="${CSS.escape(symbol)}"]` : `[data-stock-analysis-host="${CSS.escape(symbol)}"]`;
+    const host = document.querySelector(hostSelector);
+    button.disabled = true;
+    button.textContent = 'Analyzing…';
+    if (host) host.innerHTML = `<div class="mnt-option-manager-loading">Running Kronos + live ${type} review…</div>`;
+    try {
+      const data = await requestJson(`/api/mnt/focus/${encodeURIComponent(symbol)}/${type}-analysis?deep=true`);
+      if (host) host.innerHTML = type === 'option' ? optionManagerHtml(data, true) : stockManagerHtml(data, true);
+      notifyStateChange(symbol, type.toUpperCase(), data.management || {});
+    } catch (error) {
+      if (host) host.innerHTML = `<div class="mnt-option-manager-error">${safe(error.message)}</div>`;
+    } finally {
+      button.disabled = false;
+      button.textContent = 'Analyze position';
+    }
+  }
+
   async function currentUnderlying(symbol) {
     try {
       const payload = await requestJson(`/api/tick/${encodeURIComponent(symbol)}`);
@@ -212,14 +269,6 @@
     } catch (_) {
       return null;
     }
-  }
-
-  function stateClass(state) {
-    const value = String(state || '').toUpperCase();
-    if (['WORKING', 'PROTECT_PROFIT', 'TAKE_PROFIT'].includes(value)) return 'good';
-    if (['UNDER_PRESSURE', 'TIME_RISK'].includes(value)) return 'caution';
-    if (['RISK_OFF', 'EXIT_REVIEW'].includes(value)) return 'danger';
-    return 'neutral';
   }
 
   function optionManagerHtml(data, deep = false) {
@@ -255,7 +304,7 @@
           <div><span>Live mark</span><strong>${money(current.mark)}</strong></div>
           <div><span>Exit P/L</span><strong class="${pnlClass}">${pct(pnl.exit_pct)} · ${money(pnl.exit_dollars)}</strong></div>
         </div>
-        ${Number.isFinite(recovery) && recovery > 0 ? `<div class="mnt-option-recovery"><strong>To get back to your premium breakeven:</strong> the option mark needs to recover about ${pct(recovery)} from here.</div>` : ''}
+        ${Number.isFinite(recovery) && recovery > 0 ? `<div class="mnt-option-recovery"><strong>To get back to premium breakeven:</strong> the option mark needs to recover about ${pct(recovery)} from here.</div>` : ''}
         <div class="mnt-option-next"><span>NEXT STEP</span><strong>${safe(management.next_step || '')}</strong></div>
         <div class="mnt-option-levels">
           <div><span>Premium breakeven</span><strong>${money(levels.premium_breakeven)}</strong></div>
@@ -270,6 +319,49 @@
         ${deep && (thesis.technical_signal || thesis.kronos_bias) ? `<div class="mnt-option-thesis">Underlying thesis: technical ${safe(thesis.technical_signal || '—')} · Kronos ${safe(thesis.kronos_bias || '—')} · decision ${safe(thesis.decision || '—')}</div>` : ''}
         ${[...conflict, ...flags].slice(0, 4).map(flag => `<div class="mnt-option-flag">${safe(flag)}</div>`).join('')}
         <div class="mnt-option-foot">${safe(management.note || 'Research-only position management.')}</div>
+      </div>`;
+  }
+
+  function stockManagerHtml(data, deep = false) {
+    const current = data.current || {};
+    const pnl = data.pnl || {};
+    const levels = data.key_levels || {};
+    const management = data.management || {};
+    const thesis = data.thesis || {};
+    const pnlValue = Number(pnl.pct);
+    const pnlClass = Number.isFinite(pnlValue) ? (pnlValue >= 0 ? 'positive' : 'negative') : '';
+    const recovery = Number(pnl.recovery_needed_pct);
+    const conflict = Array.isArray(thesis.conflict_reasons) ? thesis.conflict_reasons : [];
+
+    return `
+      <div class="mnt-option-manager mnt-stock-manager ${stateClass(management.state)}">
+        <div class="mnt-option-manager-head">
+          <div><span>MnT STOCK POSITION MANAGER</span><strong>${safe(management.state || 'WATCH')}</strong></div>
+          <span>${safe(data.direction || 'LONG')} · ${Number(data.shares) || '—'} shares</span>
+        </div>
+        <h4>${safe(management.headline || 'Review the live stock position.')}</h4>
+        <div class="mnt-option-live-grid">
+          <div><span>Average entry</span><strong>${money(data.entry_price)}</strong></div>
+          <div><span>Current exit ref</span><strong>${money(current.exit_reference)}</strong></div>
+          <div><span>Market value</span><strong>${money(pnl.market_value)}</strong></div>
+          <div><span>Unrealized P/L</span><strong class="${pnlClass}">${pct(pnl.pct)} · ${money(pnl.dollars)}</strong></div>
+        </div>
+        ${Number.isFinite(recovery) && recovery > 0 ? `<div class="mnt-option-recovery"><strong>Move needed back to your entry:</strong> about ${pct(recovery)} from the current stock price.</div>` : ''}
+        <div class="mnt-option-next"><span>NEXT STEP</span><strong>${safe(management.next_step || '')}</strong></div>
+        <div class="mnt-option-levels">
+          <div><span>Cost basis</span><strong>${money(pnl.cost_basis)}</strong></div>
+          <div><span>Structural invalidation</span><strong>${money(levels.underlying_invalidation)}</strong></div>
+          <div><span>Target 1</span><strong>${money(levels.underlying_target_1)}</strong></div>
+          <div><span>Target 2</span><strong>${money(levels.underlying_target_2)}</strong></div>
+          <div><span>+5% checkpoint</span><strong>${money(levels.price_checkpoint_5)}</strong></div>
+          <div><span>+10% checkpoint</span><strong>${money(levels.price_checkpoint_10)}</strong></div>
+          <div><span>+20% checkpoint</span><strong>${money(levels.price_checkpoint_20)}</strong></div>
+          <div><span>Protect-profit reference</span><strong>${money(levels.protect_profit_reference)}</strong></div>
+        </div>
+        ${deep && levels.underlying_target_3 ? `<div class="mnt-option-levels"><div><span>Target 3</span><strong>${money(levels.underlying_target_3)}</strong></div></div>` : ''}
+        ${deep && (thesis.technical_signal || thesis.kronos_bias) ? `<div class="mnt-option-thesis">Current thesis: technical ${safe(thesis.technical_signal || '—')} · Kronos ${safe(thesis.kronos_bias || '—')} · decision ${safe(thesis.decision || '—')}</div>` : ''}
+        ${conflict.slice(0, 3).map(flag => `<div class="mnt-option-flag">${safe(flag)}</div>`).join('')}
+        <div class="mnt-option-foot">${safe(management.note || 'Research-only stock position management.')}</div>
       </div>`;
   }
 
@@ -290,54 +382,59 @@
 
     const snapshots = await Promise.all(items.map(async item => {
       const kind = String(item.kind || 'WATCHING').toUpperCase();
-      if (kind === 'OPEN_OPTION') {
-        try {
-          return { option: await requestJson(`/api/mnt/focus/${encodeURIComponent(item.symbol)}/option-analysis`) };
-        } catch (error) {
-          return { optionError: error.message };
-        }
+      try {
+        if (kind === 'OPEN_OPTION') return { option: await requestJson(`/api/mnt/focus/${encodeURIComponent(item.symbol)}/option-analysis`) };
+        if (kind === 'OPEN_STOCK') return { stock: await requestJson(`/api/mnt/focus/${encodeURIComponent(item.symbol)}/stock-analysis`) };
+        return { price: await currentUnderlying(item.symbol) };
+      } catch (error) {
+        return { error: error.message };
       }
-      return { price: await currentUnderlying(item.symbol) };
     }));
 
     host.innerHTML = items.map((item, index) => {
       const snapshot = snapshots[index] || {};
       const kind = String(item.kind || 'WATCHING').toUpperCase();
       const openPosition = kind === 'OPEN_STOCK' || kind === 'OPEN_OPTION';
-      const price = kind === 'OPEN_OPTION' ? snapshot.option?.current?.underlying_price : snapshot.price;
-      let performance = '';
-      if (kind === 'OPEN_STOCK' && Number.isFinite(Number(item.entry_price)) && Number.isFinite(price)) {
-        const move = (price / Number(item.entry_price) - 1) * 100;
-        performance = `<span class="${move >= 0 ? 'positive' : 'negative'}">${move >= 0 ? '+' : ''}${move.toFixed(1)}%</span>`;
+      const option = snapshot.option;
+      const stock = snapshot.stock;
+      const price = kind === 'OPEN_OPTION' ? option?.current?.underlying_price : kind === 'OPEN_STOCK' ? stock?.current?.price : snapshot.price;
+
+      if (option?.management) notifyStateChange(item.symbol, kind, option.management);
+      if (stock?.management) notifyStateChange(item.symbol, kind, stock.management);
+
+      const positionBody = kind === 'OPEN_OPTION'
+        ? option
+          ? `<div data-option-analysis-host="${safe(item.symbol)}">${optionManagerHtml(option, false)}</div>`
+          : `<div data-option-analysis-host="${safe(item.symbol)}" class="mnt-option-manager-error"><strong>Live option management needs more detail.</strong><span>${safe(snapshot.error || 'Add expiration, strike, call/put and premium paid.')}</span></div>`
+        : kind === 'OPEN_STOCK'
+          ? stock
+            ? `<div data-stock-analysis-host="${safe(item.symbol)}">${stockManagerHtml(stock, false)}</div>`
+            : `<div data-stock-analysis-host="${safe(item.symbol)}" class="mnt-option-manager-error"><strong>Stock position details are incomplete.</strong><span>${safe(snapshot.error || 'Add average entry price and number of shares.')}</span><span>Re-enter ${safe(item.symbol)} above as Open stock to update it.</span></div>`
+          : '';
+
+      let actions = `<button type="button" data-focus-open="${safe(item.symbol)}" data-run-fusion="true">Open + run MnT</button>`;
+      if (kind === 'OPEN_OPTION') {
+        actions = `<button type="button" data-focus-analyze-option="${safe(item.symbol)}">Analyze position</button><button type="button" data-focus-open="${safe(item.symbol)}">Trade Desk</button>`;
+      } else if (kind === 'OPEN_STOCK') {
+        actions = `<button type="button" data-focus-analyze-stock="${safe(item.symbol)}">Analyze position</button><button type="button" data-focus-open="${safe(item.symbol)}">Trade Desk</button>`;
       }
-
-      const optionBody = kind === 'OPEN_OPTION'
-        ? snapshot.option
-          ? `<div data-option-analysis-host="${safe(item.symbol)}">${optionManagerHtml(snapshot.option, false)}</div>`
-          : `<div data-option-analysis-host="${safe(item.symbol)}" class="mnt-option-manager-error"><strong>Live option management needs more detail.</strong><span>${safe(snapshot.optionError || 'Add expiration, strike, call/put and your premium paid.')}</span><span>Re-enter ${safe(item.symbol)} above as Open option to update the saved position.</span></div>`
-        : '';
-
-      const actions = kind === 'OPEN_OPTION'
-        ? `<button type="button" data-focus-analyze-option="${safe(item.symbol)}">Analyze position</button>
-           <button type="button" data-focus-open="${safe(item.symbol)}">Trade Desk</button>
-           <button type="button" class="remove" data-focus-remove="${safe(item.symbol)}">Remove</button>`
-        : `<button type="button" data-focus-open="${safe(item.symbol)}" data-run-fusion="true">Open + run MnT</button>
-           <button type="button" class="remove" data-focus-remove="${safe(item.symbol)}">Remove</button>`;
+      actions += `<button type="button" class="remove" data-focus-remove="${safe(item.symbol)}">Remove</button>`;
 
       return `
-        <article class="mnt-focus-card ${openPosition ? 'position' : ''} ${kind === 'OPEN_OPTION' ? 'option-position' : ''}">
+        <article class="mnt-focus-card ${openPosition ? 'position' : ''} ${kind === 'OPEN_OPTION' ? 'option-position' : kind === 'OPEN_STOCK' ? 'stock-position' : ''}">
           <div class="mnt-focus-card-top">
-            <div><strong>${safe(item.symbol)}</strong><span>${money(price)} ${performance}</span></div>
+            <div><strong>${safe(item.symbol)}</strong><span>${money(price)}</span></div>
             <span class="mnt-focus-type">${labelKind(kind)}</span>
           </div>
           <div class="mnt-focus-grid">
             <div><span>Bias</span><strong>${safe(item.direction || 'AUTO')}</strong></div>
-            <div><span>${kind === 'OPEN_OPTION' ? 'Premium paid' : 'Entry / reference'}</span><strong>${money(item.entry_price)}</strong></div>
+            <div><span>${kind === 'OPEN_OPTION' ? 'Premium paid' : kind === 'OPEN_STOCK' ? 'Average entry' : 'Entry / reference'}</span><strong>${money(item.entry_price)}</strong></div>
+            ${kind === 'OPEN_STOCK' ? `<div><span>Shares</span><strong>${Number(item.shares) || '—'}</strong></div>` : ''}
             ${kind === 'OPEN_OPTION' ? `<div class="wide"><span>Your contract</span><strong>${optionSpecText(item)}</strong></div>` : ''}
             ${item.note ? `<div class="wide"><span>Your note</span><strong>${safe(item.note)}</strong></div>` : ''}
           </div>
-          ${optionBody}
-          <div class="mnt-focus-actions ${kind === 'OPEN_OPTION' ? 'option-actions' : ''}">${actions}</div>
+          ${positionBody}
+          <div class="mnt-focus-actions ${openPosition ? 'option-actions' : ''}">${actions}</div>
         </article>`;
     }).join('');
   }
