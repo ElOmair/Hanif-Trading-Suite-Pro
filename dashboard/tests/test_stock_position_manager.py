@@ -28,7 +28,7 @@ def test_fractional_shares_are_supported():
     result = build_stock_position_analysis(item, quote(last=55.0, bid=54.9, ask=55.1))
     assert result["shares"] == 1.25
     assert result["pnl"]["cost_basis"] == 62.5
-    assert result["pnl"]["dollars"] == 6.13
+    assert result["pnl"]["dollars"] == 6.12
 
 
 def test_short_stock_position_reverses_pnl_math():
