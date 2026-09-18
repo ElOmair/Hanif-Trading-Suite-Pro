@@ -7,15 +7,19 @@ import schwab_api
 STATIC = Path(__file__).resolve().parents[1] / "static"
 
 
-def test_main_dashboard_wires_unified_navigation_and_broker_modules():
+def test_main_dashboard_wires_tabbed_workspaces_and_broker_modules():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
-    assert "Home" in html
-    assert "Trades" in html
-    assert "Invest / Holds" in html
+    for tab in ("trade", "market", "focus", "ideas", "portfolio", "learning"):
+        assert f'data-mnt-tab="{tab}"' in html
+        assert f'data-mnt-panel="{tab}"' in html
+    assert "Trade Desk" in html
+    assert "My Focus" in html
     assert "Portfolio" in html
     assert "Learning" in html
     assert 'href="/broker"' in html
     assert "/static/unified-shell.css" in html
+    assert "/static/workspace-shell.css" in html
+    assert "/static/workspace-tabs.js" in html
     assert "/static/portfolio-panel.js" in html
     assert "/static/schwab-fusion.js" in html
     assert "/static/portfolio-coach.js" in html
@@ -30,6 +34,11 @@ def test_broker_page_links_back_to_same_unified_app():
     assert 'href="/#mntLearningLab"' in html
     assert "Order submission" in html
     assert "DISABLED" in html
+
+    tabs = (STATIC / "workspace-tabs.js").read_text(encoding="utf-8")
+    assert "trades: 'trade'" in tabs
+    assert "mntopportunityshell: 'ideas'" in tabs
+    assert "mntlearninglab: 'learning'" in tabs
 
 
 def test_position_aware_frontend_has_no_order_submission_calls():
