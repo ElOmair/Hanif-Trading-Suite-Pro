@@ -8,8 +8,9 @@ from pathlib import Path
 import httpx
 
 from daily_scorecard_alert import maybe_send_daily_scorecard
+from focused_alert_scan import scan_once
 from learning_snapshot import write_learning_snapshot
-from mnt_alert_worker import AlertState, _env_float, market_scan_active, scan_once
+from mnt_alert_worker import AlertState, _env_float, market_scan_active
 from option_shadow_collector import refresh_due_option_marks
 from position_state_alerts import PositionAlertState, refresh_position_alerts
 from session_risk import session_risk_status
