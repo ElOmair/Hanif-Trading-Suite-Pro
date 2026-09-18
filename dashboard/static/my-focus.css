@@ -56,16 +56,19 @@
   border-color: rgba(96, 165, 250, 0.34);
 }
 
+.mnt-focus-position-fields,
 .mnt-focus-option-fields {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: .8fr .8fr 1fr .65fr 1.6fr;
   gap: 8px;
   padding: 9px;
   border: 1px solid rgba(96, 165, 250, 0.16);
   border-radius: 10px;
   background: rgba(37, 99, 235, 0.05);
 }
+.mnt-focus-position-fields { grid-template-columns: minmax(150px, .7fr); max-width: 260px; }
+.mnt-focus-option-fields { grid-template-columns: .8fr .8fr 1fr .65fr 1.6fr; }
+.mnt-focus-position-fields[hidden],
 .mnt-focus-option-fields[hidden] { display: none !important; }
 
 .mnt-focus-message {
@@ -91,7 +94,8 @@
   min-width: 0;
 }
 .mnt-focus-card.position { border-color: rgba(34, 197, 94, 0.30); }
-.mnt-focus-card.option-position { grid-column: span 2; }
+.mnt-focus-card.option-position,
+.mnt-focus-card.stock-position { grid-column: span 2; }
 
 .mnt-focus-card-top {
   display: flex;
@@ -135,6 +139,7 @@
   border-radius: 11px;
   background: rgba(3, 10, 22, .72);
 }
+.mnt-stock-manager { background: rgba(3, 18, 18, .66); }
 .mnt-option-manager.good { border-color: rgba(34, 197, 94, .38); }
 .mnt-option-manager.caution { border-color: rgba(245, 158, 11, .4); }
 .mnt-option-manager.danger { border-color: rgba(248, 113, 113, .45); }
@@ -167,7 +172,7 @@
 }
 .mnt-option-live-grid strong,
 .mnt-option-levels strong { display: block; margin-top: 2px; font-size: .8rem; overflow-wrap: anywhere; }
-.mnt-option-levels { margin-top: 8px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.mnt-option-levels { margin-top: 8px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 
 .mnt-option-next,
 .mnt-option-recovery,
@@ -220,17 +225,20 @@
 @media (max-width: 1200px) {
   .mnt-focus-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .mnt-focus-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .mnt-focus-card.option-position { grid-column: span 2; }
+  .mnt-focus-card.option-position,
+  .mnt-focus-card.stock-position { grid-column: span 2; }
 }
 
 @media (max-width: 700px) {
   .mnt-focus-shell { margin: 12px 10px 0; padding: 12px; }
   .mnt-focus-head { flex-direction: column; }
   .mnt-focus-form { grid-template-columns: 1fr; }
+  .mnt-focus-position-fields { max-width: none; grid-template-columns: 1fr; }
   .mnt-focus-option-fields { grid-template-columns: 1fr 1fr; }
   .mnt-focus-option-fields > :last-child { grid-column: 1 / -1; }
   .mnt-focus-list { grid-template-columns: 1fr; }
-  .mnt-focus-card.option-position { grid-column: span 1; }
+  .mnt-focus-card.option-position,
+  .mnt-focus-card.stock-position { grid-column: span 1; }
   .mnt-option-live-grid, .mnt-option-levels { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mnt-focus-actions.option-actions { grid-template-columns: 1fr 1fr; }
   .mnt-focus-actions.option-actions .remove { grid-column: 1 / -1; }
