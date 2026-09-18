@@ -15,6 +15,13 @@ DASHBOARD_ROOT = Path(__file__).resolve().parent
 KRONOS_ROOT = Path(os.getenv("KRONOS_ROOT", "/home/airomair/Kronos")).expanduser()
 DATA_DIR = KRONOS_ROOT / "trading" / "data"
 
+# When this file is executed through a symlink at Kronos/trading/market_data.py,
+# Python may otherwise search the symlink directory before the dashboard repo.
+# Put the resolved repo directory on sys.path so Schwab provider modules import
+# consistently whether the bridge is run directly or through that symlink.
+if str(DASHBOARD_ROOT) not in sys.path:
+    sys.path.insert(0, str(DASHBOARD_ROOT))
+
 # The dashboard service already supplies these variables through systemd. These
 # file loads make the bridge work when it is run directly from a shell too.
 load_dotenv(KRONOS_ROOT / ".env")
