@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 
 import schwab_market_data as market
 
@@ -47,11 +48,35 @@ def test_latest_quote_normalizes_schwab_nbbo(monkeypatch):
     assert result["quote"]["timestamp"].endswith("+00:00")
 
 
+def test_intraday_filters_use_explicit_window_without_period():
+    now = datetime(2026, 9, 18, 14, 30, tzinfo=timezone.utc)
+    filters = market._history_filters("5m", now)
+    assert filters["periodType"] == "day"
+    assert filters["frequencyType"] == "minute"
+    assert filters["frequency"] == 5
+    assert "period" not in filters
+    assert filters["endDate"] == int(now.timestamp() * 1000)
+    assert filters["startDate"] < filters["endDate"]
+    assert filters["needExtendedHoursData"] is True
+
+
+def test_daily_filters_can_use_fixed_period():
+    filters = market._history_filters("1d")
+    assert filters["periodType"] == "year"
+    assert filters["period"] == 2
+    assert filters["frequencyType"] == "daily"
+    assert filters["frequency"] == 1
+    assert "startDate" not in filters
+
+
 def test_price_history_rows_are_normalized_and_limited(monkeypatch):
     async def fake_history(symbol, **filters):
         assert symbol == "NVDA"
         assert filters["frequencyType"] == "minute"
         assert filters["frequency"] == 5
+        assert "period" not in filters
+        assert filters.get("startDate")
+        assert filters.get("endDate")
         return {
             "candles": [
                 {"datetime": 1_789_000_000_000 + i * 300_000, "open": 100 + i, "high": 101 + i, "low": 99 + i, "close": 100.5 + i, "volume": 1000 + i}
@@ -73,6 +98,7 @@ def test_one_hour_bars_are_aggregated_from_30_minute_candles(monkeypatch):
 
     async def fake_history(symbol, **filters):
         assert filters["frequency"] == 30
+        assert "period" not in filters
         return {
             "candles": [
                 {"datetime": base, "open": 10, "high": 12, "low": 9, "close": 11, "volume": 100},
@@ -84,8 +110,7 @@ def test_one_hour_bars_are_aggregated_from_30_minute_candles(monkeypatch):
     result = asyncio.run(market.bars("AMD", "1h", 20))
     assert len(result["bars"]) in {1, 2}
     # The aggregation buckets on UTC clock-hours. If both half-hours share a bucket,
-    # verify full OHLCV aggregation; if the synthetic epoch straddles a clock-hour,
-    # both normalized bars are still retained without losing volume.
+    # both normalized bars still retain the complete source volume and range.
     assert sum(row["volume"] for row in result["bars"]) == 300
     assert max(row["high"] for row in result["bars"]) == 13
     assert min(row["low"] for row in result["bars"]) == 9
