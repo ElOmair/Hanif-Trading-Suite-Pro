@@ -20,6 +20,13 @@ from alpaca.data.requests import StockBarsRequest, StockLatestBarRequest, StockL
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 
 from kronos_api import router as kronos_router
+from schwab_market_data import (
+    bars as schwab_bars,
+    latest_quote as schwab_latest_quote,
+    market_data_ready as schwab_market_ready,
+    market_data_status as schwab_market_status,
+    radar_bars as schwab_radar_bars,
+)
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT.parent / ".env")
@@ -45,20 +52,30 @@ def _env_float(name: str, default: float, minimum: float) -> float:
     return max(minimum, value)
 
 
+def _env_int(name: str, default: int, minimum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, value)
+
+
 API_KEY = os.getenv("ALPACA_API_KEY", "").strip()
 API_SECRET = os.getenv("ALPACA_SECRET_KEY", "").strip()
 KRONOS_API_URL = os.getenv("KRONOS_API_URL", "http://127.0.0.1:8000").rstrip("/")
+MARKET_DATA_PRIMARY = os.getenv("MNT_MARKET_DATA_PRIMARY", "schwab").strip().lower()
 RADAR_UNIVERSE = [s.strip().upper() for s in os.getenv("RADAR_UNIVERSE", DEFAULT_UNIVERSE).split(",") if s.strip()]
 BARS_CACHE_TTL = _env_float("BARS_CACHE_TTL_SECONDS", 5.0, 1.0)
 TICK_CACHE_TTL = _env_float("TICK_CACHE_TTL_SECONDS", 2.0, 0.5)
 RADAR_CACHE_TTL = _env_float("RADAR_CACHE_TTL_SECONDS", 60.0, 10.0)
 WS_POLL_SECONDS = _env_float("WS_POLL_SECONDS", 1.0, 0.5)
+SCHWAB_RADAR_CONCURRENCY = _env_int("MNT_SCHWAB_RADAR_CONCURRENCY", 5, 1)
 
 alpaca: StockHistoricalDataClient | None = None
 if API_KEY and API_SECRET:
     alpaca = StockHistoricalDataClient(API_KEY, API_SECRET)
 
-app = FastAPI(title="Hanif Trading Suite Dashboard", version="0.2.0")
+app = FastAPI(title="Hanif Trading Suite Dashboard", version="0.3.0")
 app.include_router(kronos_router)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
@@ -73,7 +90,7 @@ _alpaca_semaphore = asyncio.Semaphore(4)
 
 def require_alpaca() -> StockHistoricalDataClient:
     if alpaca is None:
-        raise HTTPException(status_code=503, detail="Alpaca credentials are not configured on the dashboard server.")
+        raise HTTPException(status_code=503, detail="Alpaca fallback credentials are not configured on the dashboard server.")
     return alpaca
 
 
@@ -130,6 +147,14 @@ def bars_to_rows(df: pd.DataFrame, symbol: str, limit: int) -> list[dict[str, An
             "volume": float(getattr(row, "volume")),
         })
     return rows
+
+
+def _rows_to_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
+    if not rows:
+        return pd.DataFrame()
+    frame = pd.DataFrame(rows).copy()
+    frame["timestamp"] = pd.to_datetime(frame["time"], unit="s", utc=True)
+    return frame[["timestamp", "open", "high", "low", "close", "volume"]]
 
 
 def _technical_snapshot(frame: pd.DataFrame, symbol: str) -> dict[str, Any] | None:
@@ -216,6 +241,97 @@ def _cached_copy(entry: dict[str, Any], *, stale: bool = False, rate_limited: bo
     return payload
 
 
+def _alpaca_provider_name() -> str:
+    return f"alpaca_{_feed().value}"
+
+
+def _schwab_is_primary() -> bool:
+    return MARKET_DATA_PRIMARY == "schwab"
+
+
+async def _alpaca_tick_payload(symbol: str) -> dict[str, Any]:
+    client = require_alpaca()
+    quote_req = StockLatestQuoteRequest(symbol_or_symbols=symbol, feed=_feed())
+    bar_req = StockLatestBarRequest(symbol_or_symbols=symbol, feed=_feed())
+    quote_map, bar_map = await asyncio.gather(
+        _alpaca_call(client.get_stock_latest_quote, quote_req),
+        _alpaca_call(client.get_stock_latest_bar, bar_req),
+    )
+    quote = quote_map.get(symbol)
+    bar = bar_map.get(symbol)
+    payload: dict[str, Any] = {
+        "symbol": symbol,
+        "provider": _alpaca_provider_name(),
+        "cached": False,
+        "stale": False,
+    }
+    if quote is not None:
+        bid, ask = float(quote.bid_price or 0), float(quote.ask_price or 0)
+        mid = (bid + ask) / 2.0 if bid and ask else (ask or bid)
+        payload["quote"] = {
+            "bid": bid,
+            "ask": ask,
+            "mid": round(mid, 4) if mid else 0,
+            "bid_size": float(quote.bid_size or 0),
+            "ask_size": float(quote.ask_size or 0),
+            "timestamp": quote.timestamp.isoformat() if quote.timestamp else None,
+        }
+    if bar is not None:
+        ts = pd.Timestamp(bar.timestamp)
+        if ts.tzinfo is None:
+            ts = ts.tz_localize("UTC")
+        payload["bar"] = {
+            "time": int(ts.timestamp()),
+            "open": float(bar.open),
+            "high": float(bar.high),
+            "low": float(bar.low),
+            "close": float(bar.close),
+            "volume": float(bar.volume),
+        }
+    return payload
+
+
+async def _alpaca_bars_payload(symbol: str, timeframe_key: str, limit: int) -> dict[str, Any]:
+    client = require_alpaca()
+    request = StockBarsRequest(
+        symbol_or_symbols=symbol,
+        timeframe=timeframe_from_text(timeframe_key),
+        start=start_for_timeframe(timeframe_key, limit),
+        feed=_feed(),
+    )
+    barset = await _alpaca_call(client.get_stock_bars, request)
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe_key,
+        "bars": bars_to_rows(barset.df, symbol, limit),
+        "provider": _alpaca_provider_name(),
+        "cached": False,
+        "stale": False,
+    }
+
+
+async def _alpaca_radar_snapshots(symbols: list[str]) -> list[dict[str, Any]]:
+    if not symbols:
+        return []
+    client = require_alpaca()
+    request = StockBarsRequest(
+        symbol_or_symbols=symbols,
+        timeframe=TimeFrame(5, TimeFrameUnit.Minute),
+        start=datetime.now(timezone.utc) - timedelta(days=7),
+        feed=_feed(),
+    )
+    barset = await _alpaca_call(client.get_stock_bars, request)
+    df = barset.df.reset_index() if not barset.df.empty else pd.DataFrame()
+    snapshots: list[dict[str, Any]] = []
+    if not df.empty and "symbol" in df.columns:
+        for symbol_name, frame in df.groupby("symbol", sort=False):
+            snapshot = _technical_snapshot(frame, str(symbol_name))
+            if snapshot:
+                snapshot["provider"] = _alpaca_provider_name()
+                snapshots.append(snapshot)
+    return snapshots
+
+
 async def _get_tick_payload(symbol: str) -> dict[str, Any]:
     now = time.monotonic()
     cached = _tick_cache.get(symbol)
@@ -228,47 +344,31 @@ async def _get_tick_payload(symbol: str) -> dict[str, Any]:
         if cached and now < cached["expires"]:
             return _cached_copy(cached)
 
-        client = require_alpaca()
-        quote_req = StockLatestQuoteRequest(symbol_or_symbols=symbol, feed=_feed())
-        bar_req = StockLatestBarRequest(symbol_or_symbols=symbol, feed=_feed())
-        try:
-            quote_map, bar_map = await asyncio.gather(
-                _alpaca_call(client.get_stock_latest_quote, quote_req),
-                _alpaca_call(client.get_stock_latest_bar, bar_req),
-            )
-        except Exception as exc:
-            if cached and _is_rate_limit_error(exc):
-                return _cached_copy(cached, stale=True, rate_limited=True)
-            if _is_rate_limit_error(exc):
-                raise HTTPException(status_code=429, detail="Alpaca rate limit reached; retry shortly.") from exc
-            raise
+        errors: dict[str, str] = {}
+        payload: dict[str, Any] | None = None
+        if _schwab_is_primary() and schwab_market_ready():
+            try:
+                payload = await schwab_latest_quote(symbol)
+                payload.update({"cached": False, "stale": False, "fallback": False})
+            except Exception as exc:
+                errors["schwab"] = type(exc).__name__
 
-        quote = quote_map.get(symbol)
-        bar = bar_map.get(symbol)
-        payload: dict[str, Any] = {"symbol": symbol, "cached": False, "stale": False}
-        if quote is not None:
-            bid, ask = float(quote.bid_price or 0), float(quote.ask_price or 0)
-            mid = (bid + ask) / 2.0 if bid and ask else (ask or bid)
-            payload["quote"] = {
-                "bid": bid,
-                "ask": ask,
-                "mid": round(mid, 4) if mid else 0,
-                "bid_size": float(quote.bid_size or 0),
-                "ask_size": float(quote.ask_size or 0),
-                "timestamp": quote.timestamp.isoformat() if quote.timestamp else None,
-            }
-        if bar is not None:
-            ts = pd.Timestamp(bar.timestamp)
-            if ts.tzinfo is None:
-                ts = ts.tz_localize("UTC")
-            payload["bar"] = {
-                "time": int(ts.timestamp()),
-                "open": float(bar.open),
-                "high": float(bar.high),
-                "low": float(bar.low),
-                "close": float(bar.close),
-                "volume": float(bar.volume),
-            }
+        if payload is None:
+            try:
+                payload = await _alpaca_tick_payload(symbol)
+                payload["fallback"] = _schwab_is_primary()
+            except Exception as exc:
+                errors[_alpaca_provider_name()] = type(exc).__name__
+                if cached:
+                    stale = _cached_copy(cached, stale=True, rate_limited=_is_rate_limit_error(exc))
+                    stale["provider_errors"] = errors
+                    return stale
+                if _is_rate_limit_error(exc):
+                    raise HTTPException(status_code=429, detail="Market-data rate limit reached; retry shortly.") from exc
+                raise HTTPException(status_code=503, detail=f"Market data unavailable: {errors}") from exc
+
+        if errors:
+            payload["provider_errors"] = errors
         _tick_cache[symbol] = {"expires": time.monotonic() + TICK_CACHE_TTL, "data": payload}
         return payload
 
@@ -280,12 +380,22 @@ def index() -> FileResponse:
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
+    schwab = schwab_market_status()
+    primary_ready = _schwab_is_primary() and bool(schwab.get("ready"))
+    active_provider = "schwab" if primary_ready else _alpaca_provider_name() if alpaca is not None else "unavailable"
     return {
         "status": "ok",
         "service": "hanif-trading-dashboard",
-        "version": "0.2.0",
+        "version": "0.3.0",
+        "market_data": {
+            "primary": MARKET_DATA_PRIMARY,
+            "active_provider": active_provider,
+            "schwab": schwab,
+            "alpaca_fallback_configured": alpaca is not None,
+            "alpaca_fallback_feed": _feed().value,
+        },
         "alpaca_configured": alpaca is not None,
-        "feed": os.getenv("ALPACA_DATA_FEED", "iex").lower(),
+        "feed": active_provider,
         "market_data_cache": {
             "bars_ttl_seconds": BARS_CACHE_TTL,
             "tick_ttl_seconds": TICK_CACHE_TTL,
@@ -304,13 +414,29 @@ async def system_status() -> dict[str, Any]:
             kronos = {"online": True, "health": response.json()} if response.is_success else {"online": False, "status_code": response.status_code}
     except Exception as exc:
         kronos = {"online": False, "error": type(exc).__name__}
-    return {"kronos": kronos, "alpaca": {"configured": alpaca is not None, "feed": _feed().value}}
+    schwab = schwab_market_status()
+    primary_ready = _schwab_is_primary() and bool(schwab.get("ready"))
+    active_provider = "schwab" if primary_ready else _alpaca_provider_name() if alpaca is not None else "unavailable"
+    return {
+        "kronos": kronos,
+        "market_data": {
+            "primary": MARKET_DATA_PRIMARY,
+            "active_provider": active_provider,
+            "primary_ready": primary_ready,
+            "degraded": _schwab_is_primary() and active_provider != "schwab",
+            "schwab": schwab,
+            "fallback": {"provider": _alpaca_provider_name(), "configured": alpaca is not None},
+        },
+        # Retain this block for older frontends while they are being cache-refreshed.
+        "alpaca": {"configured": alpaca is not None, "feed": _feed().value},
+    }
 
 
 @app.get("/api/bars/{symbol}")
 async def bars(symbol: str, timeframe: str = Query("5m"), limit: int = Query(400, ge=50, le=1000)) -> dict[str, Any]:
     symbol = normalize_symbol(symbol)
     timeframe_key = timeframe.strip().lower()
+    timeframe_from_text(timeframe_key)
     cache_key = (symbol, timeframe_key, limit)
     now = time.monotonic()
     cached = _bars_cache.get(cache_key)
@@ -323,29 +449,33 @@ async def bars(symbol: str, timeframe: str = Query("5m"), limit: int = Query(400
         if cached and now < cached["expires"]:
             return _cached_copy(cached)
 
-        client = require_alpaca()
-        request = StockBarsRequest(
-            symbol_or_symbols=symbol,
-            timeframe=timeframe_from_text(timeframe_key),
-            start=start_for_timeframe(timeframe_key, limit),
-            feed=_feed(),
-        )
-        try:
-            barset = await _alpaca_call(client.get_stock_bars, request)
-        except Exception as exc:
-            if cached and _is_rate_limit_error(exc):
-                return _cached_copy(cached, stale=True, rate_limited=True)
-            if _is_rate_limit_error(exc):
-                raise HTTPException(status_code=429, detail="Alpaca rate limit reached; retry shortly.") from exc
-            raise
+        errors: dict[str, str] = {}
+        payload: dict[str, Any] | None = None
+        if _schwab_is_primary() and schwab_market_ready():
+            try:
+                payload = await schwab_bars(symbol, timeframe_key, limit)
+                if not payload.get("bars"):
+                    raise RuntimeError("Schwab returned no candles")
+                payload.update({"cached": False, "stale": False, "fallback": False})
+            except Exception as exc:
+                errors["schwab"] = type(exc).__name__
 
-        payload = {
-            "symbol": symbol,
-            "timeframe": timeframe_key,
-            "bars": bars_to_rows(barset.df, symbol, limit),
-            "cached": False,
-            "stale": False,
-        }
+        if payload is None:
+            try:
+                payload = await _alpaca_bars_payload(symbol, timeframe_key, limit)
+                payload["fallback"] = _schwab_is_primary()
+            except Exception as exc:
+                errors[_alpaca_provider_name()] = type(exc).__name__
+                if cached:
+                    stale = _cached_copy(cached, stale=True, rate_limited=_is_rate_limit_error(exc))
+                    stale["provider_errors"] = errors
+                    return stale
+                if _is_rate_limit_error(exc):
+                    raise HTTPException(status_code=429, detail="Market-data rate limit reached; retry shortly.") from exc
+                raise HTTPException(status_code=503, detail=f"Market bars unavailable: {errors}") from exc
+
+        if errors:
+            payload["provider_errors"] = errors
         _bars_cache[cache_key] = {"expires": time.monotonic() + BARS_CACHE_TTL, "data": payload}
         return payload
 
@@ -377,47 +507,68 @@ async def radar(limit: int = Query(8, ge=3, le=20)) -> dict[str, Any]:
             cached["shorts"] = cached["shorts"][:limit]
             return cached
 
-        client = require_alpaca()
-        request = StockBarsRequest(
-            symbol_or_symbols=RADAR_UNIVERSE,
-            timeframe=TimeFrame(5, TimeFrameUnit.Minute),
-            start=datetime.now(timezone.utc) - timedelta(days=7),
-            feed=_feed(),
-        )
-        try:
-            barset = await _alpaca_call(client.get_stock_bars, request)
-        except Exception as exc:
-            if _radar_cache["data"] is not None and _is_rate_limit_error(exc):
-                stale = dict(_radar_cache["data"])
-                stale["cached"] = True
-                stale["stale"] = True
-                stale["rate_limited"] = True
-                stale["longs"] = stale["longs"][:limit]
-                stale["shorts"] = stale["shorts"][:limit]
-                return stale
-            if _is_rate_limit_error(exc):
-                raise HTTPException(status_code=429, detail="Alpaca rate limit reached; retry shortly.") from exc
-            raise
+        snapshots: list[dict[str, Any]] = []
+        provider_counts: dict[str, int] = {}
+        provider_errors: dict[str, str] = {}
+        fallback_symbols: list[str] = []
+        remaining = list(RADAR_UNIVERSE)
 
-        df = barset.df.reset_index() if not barset.df.empty else pd.DataFrame()
-        snapshots = []
-        if not df.empty and "symbol" in df.columns:
-            for symbol_name, frame in df.groupby("symbol", sort=False):
-                snapshot = _technical_snapshot(frame, str(symbol_name))
+        if _schwab_is_primary() and schwab_market_ready():
+            schwab_rows, schwab_errors = await schwab_radar_bars(
+                RADAR_UNIVERSE,
+                limit=120,
+                concurrency=SCHWAB_RADAR_CONCURRENCY,
+            )
+            for symbol_name, rows in schwab_rows.items():
+                snapshot = _technical_snapshot(_rows_to_frame(rows), symbol_name)
                 if snapshot:
+                    snapshot["provider"] = "schwab"
                     snapshots.append(snapshot)
+            provider_counts["schwab"] = len(schwab_rows)
+            remaining = [symbol for symbol in RADAR_UNIVERSE if symbol not in schwab_rows]
+            provider_errors.update({f"schwab:{symbol}": reason for symbol, reason in schwab_errors.items()})
+
+        if remaining:
+            try:
+                alpaca_snapshots = await _alpaca_radar_snapshots(remaining)
+                snapshots.extend(alpaca_snapshots)
+                provider_counts[_alpaca_provider_name()] = len(alpaca_snapshots)
+                fallback_symbols = [item["symbol"] for item in alpaca_snapshots]
+            except Exception as exc:
+                provider_errors[_alpaca_provider_name()] = type(exc).__name__
+                if _radar_cache["data"] is not None:
+                    stale = dict(_radar_cache["data"])
+                    stale["cached"] = True
+                    stale["stale"] = True
+                    stale["provider_errors"] = provider_errors
+                    stale["longs"] = stale["longs"][:limit]
+                    stale["shorts"] = stale["shorts"][:limit]
+                    return stale
+                if not snapshots:
+                    raise HTTPException(status_code=503, detail=f"Radar market data unavailable: {provider_errors}") from exc
 
         longs = sorted((s for s in snapshots if s["direction"] == "LONG"), key=lambda x: x["rank_score"], reverse=True)
         shorts = sorted((s for s in snapshots if s["direction"] == "SHORT"), key=lambda x: x["rank_score"], reverse=True)
+        if provider_counts.get("schwab") and not fallback_symbols:
+            feed = "schwab"
+        elif provider_counts.get("schwab") and fallback_symbols:
+            feed = "mixed"
+        else:
+            feed = _alpaca_provider_name()
         data = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "feed": _feed().value,
+            "feed": feed,
+            "primary_provider": MARKET_DATA_PRIMARY,
+            "provider_counts": provider_counts,
+            "fallback_symbols": fallback_symbols,
+            "provider_errors": provider_errors,
             "universe_size": len(RADAR_UNIVERSE),
+            "symbols_scored": len(snapshots),
             "longs": longs,
             "shorts": shorts,
             "cached": False,
             "stale": False,
-            "note": "Radar score is a fast technical pre-filter, not a trade recommendation.",
+            "note": "Radar score is a fast technical pre-filter, not a trade recommendation. Provider is attached to each row for auditability.",
         }
         _radar_cache["data"] = data
         _radar_cache["expires"] = time.monotonic() + RADAR_CACHE_TTL
@@ -434,7 +585,7 @@ async def market_socket(websocket: WebSocket, symbol: str) -> None:
     except HTTPException:
         await websocket.close(code=1008)
         return
-    if alpaca is None:
+    if not schwab_market_ready() and alpaca is None:
         await websocket.close(code=1011)
         return
 
